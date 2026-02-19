@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     )
 
     SECRET_KEY: str
-    # 60 minutes * 24 hours * 8 days = 8 days
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8
+    # 60 minutes * 24 hours = 1 day (configurable via ACCESS_TOKEN_EXPIRE_MINUTES env var)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
 
     PROJECT_NAME: str
     POSTGRES_SERVER: str
@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     @property
     def DATABASE_DSN(self) -> PostgresDsn:
         return PostgresDsn.build(
-            scheme="postgresql+psycopg",
+            scheme="postgresql",
             username=self.POSTGRES_USER,
             password=self.POSTGRES_PASSWORD,
             host=self.POSTGRES_SERVER,

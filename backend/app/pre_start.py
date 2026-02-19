@@ -9,7 +9,8 @@ from tenacity import (
     wait_fixed,
 )
 
-from app.core.db import pool
+from app.core.config import settings
+from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -23,25 +24,29 @@ wait_seconds = 1
     before=before_log(logger, logging.INFO),
     after=after_log(logger, logging.WARNING),
     retry=retry_if_exception_type(Exception)
-    & ~retry_if_exception_type(NotImplementedError),
+    & ~retry_if_exception_type(NotImplementedError)
+    & ~retry_if_exception_type(RuntimeError),
 )
-def init(db_engine) -> None:
+def init() -> None:
     """code to do the pre-start service"""
-    if db_engine is None:
-        logger.error("Database pool is not initialized")
-        raise RuntimeError("Database pool is not initialized")
+    # Create a temporary pool for connectivity check
+    pool = None
     try:
-        with db_engine.connection() as conn:
+        pool = ConnectionPool(settings.DATABASE_DSN)
+        with pool.connection() as conn:
             conn.execute("SELECT 1")
         logger.info("Database connectivity check successful")
-    except Exception as e:
-        logger.error(f"Database connectivity check failed: {e}")
-        raise RuntimeError(f"Database connectivity check failed: {e}") from e
+    except Exception:
+        logger.exception("Database connectivity check failed")
+        raise
+    finally:
+        if pool is not None:
+            pool.close()
 
 
 def main() -> None:
     logger.info("Initializing service")
-    init(pool)
+    init()
     logger.info("Service finished initializing")
 
 
