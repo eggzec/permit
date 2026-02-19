@@ -2,7 +2,7 @@ import logging
 
 from tenacity import after_log, before_log, retry, stop_after_attempt, wait_fixed
 
-from permit.core.db import engine
+from app.core.db import pool
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ def init(db_engine) -> None:
 
 def main() -> None:
     logger.info("Initializing service")
-    init(engine)
+    init(pool)
     logger.info("Service finished initializing")
 
 

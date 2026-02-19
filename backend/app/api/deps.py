@@ -6,7 +6,7 @@ from psycopg import Cursor
 
 
 def get_db() -> Generator[Cursor, None, None]:
-    """should returnO the cursor for using with the database"""
+    """should return the cursor for using with the database"""
     ...
 
 
