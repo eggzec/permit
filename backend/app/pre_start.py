@@ -14,11 +14,11 @@ wait_seconds = 1
     stop=stop_after_attempt(max_tries),
     wait=wait_fixed(wait_seconds),
     before=before_log(logger, logging.INFO),
-    after=after_log(logger, logging.WARN),
+    after=after_log(logger, logging.WARNING),
 )
 def init(db_engine) -> None:
     """code to do the pre-start service"""
-    ...
+    raise NotImplementedError("pre-start init is not implemented yet")
 
 
 def main() -> None:
