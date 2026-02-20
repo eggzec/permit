@@ -1,0 +1,37 @@
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: ./backend
+    env_file: .env
+    environment:
+      - POSTGRES_SERVER=db
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - permit_net
+
+  db:
+    image: postgres:18.2-alpine3.23
+    env_file: .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d/:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - permit_net
+
+volumes:
+  postgres_data:
+
+networks:
+  permit_net:
+    driver: bridge
