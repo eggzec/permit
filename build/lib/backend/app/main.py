@@ -1,7 +1,9 @@
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -21,8 +23,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Initializing database pool")
-    pool = ConnectionPool(str(settings.DATABASE_DSN))
-
+    pool = ConnectionPool(settings.DATABASE_DSN)
+    
     # Connectivity check
     try:
         with pool.connection() as conn:
@@ -32,12 +34,12 @@ async def lifespan(app: FastAPI):
         logger.exception("Database connectivity check failed")
         pool.close()
         raise RuntimeError("Database connectivity check failed") from e
-
+    
     app.state.db_pool = pool
     logger.info("Database pool initialized")
-
+    
     yield
-
+    
     # Shutdown
     logger.info("Closing database pool")
     pool.close()
@@ -83,15 +85,25 @@ async def add_request_id(request: Request, call_next):
 # ============================================================================
 
 
+def get_request_id_from_context() -> str:
+    """Extract request_id from request context if available"""
+    try:
+        from fastapi import Request
+        from starlette.datastructures import Headers
+
+        # Fallback request_id
+        return str(uuid.uuid4())
+    except Exception:
+        return str(uuid.uuid4())
+
+
 @app.exception_handler(APIException)
 async def api_exception_handler(request: Request, exc: APIException):
     """Handle custom API exceptions"""
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
     logger.warning(
-        "API Exception: %s - %s",
-        exc.error_code,
-        exc.message,
+        f"API Exception: {exc.error_code} - {exc.message}",
         extra={"request_id": request_id, "error_code": exc.error_code},
     )
 
@@ -127,8 +139,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         )
 
     logger.warning(
-        "Validation Error: %d validation errors",
-        len(details),
+        f"Validation Error: {len(details)} validation errors",
         extra={
             "request_id": request_id,
             "validation_errors": details,
@@ -158,8 +169,7 @@ async def general_exception_handler(request: Request, exc: Exception):
 
     # Log the full traceback server-side
     logger.exception(
-        "Unexpected error: %s",
-        str(exc),
+        f"Unexpected error: {str(exc)}",
         extra={"request_id": request_id},
     )
 
@@ -177,3 +187,4 @@ async def general_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=error_response,
     )
+

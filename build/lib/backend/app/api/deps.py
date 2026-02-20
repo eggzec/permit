@@ -1,22 +1,15 @@
 from collections.abc import Generator
 from typing import Annotated
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from psycopg import Cursor
-
-from app.core.exceptions import APIException
-from app.schemas.response import ErrorCode
 
 
 def get_db(request: Request) -> Generator[Cursor, None, None]:
     """Return a database cursor for the request."""
     pool = getattr(request.app.state, "db_pool", None)
     if pool is None:
-        raise APIException(
-            error_code=ErrorCode.INTERNAL_SERVER_ERROR,
-            message="Database pool not initialized",
-            http_status=500,
-        )
+        raise HTTPException(status_code=500, detail="Database pool not initialized")
     with pool.connection() as conn:
         with conn.cursor() as cursor:
             yield cursor

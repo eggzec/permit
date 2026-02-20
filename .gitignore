@@ -3,7 +3,7 @@
 
 # backend
 __pycache__
-app.egg-info
+*.egg-info
 *.pyc
 .mypy_cache
 .coverage
