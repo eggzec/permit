@@ -145,13 +145,15 @@ Every request generates or accepts a unique `request_id`:
 ### Example Request/Response with Request ID
 
 **Request:**
-```
+
+```http
 GET /api/v1/health
 X-Request-ID: my-custom-request-123
 ```
 
 **Response:**
-```
+
+```http
 HTTP/1.1 200 OK
 X-Request-ID: my-custom-request-123
 
@@ -199,6 +201,7 @@ The FastAPI exception handlers map the following to the contract:
 **Endpoint:** `GET /api/v1/health`
 
 **Response (200 OK):**
+
 ```json
 {
   "data": {
@@ -213,6 +216,7 @@ The FastAPI exception handlers map the following to the contract:
 **Endpoint:** `POST /api/v1/login`
 
 **Request (invalid):**
+
 ```json
 {
   "username": "",
@@ -221,6 +225,7 @@ The FastAPI exception handlers map the following to the contract:
 ```
 
 **Response (422 Unprocessable Entity):**
+
 ```json
 {
   "error": {
@@ -243,6 +248,7 @@ The FastAPI exception handlers map the following to the contract:
 **Endpoint:** `GET /api/v1/protected`
 
 **Response (401 Unauthorized):**
+
 ```json
 {
   "error": {
@@ -260,6 +266,7 @@ The FastAPI exception handlers map the following to the contract:
 **Endpoint:** `GET /api/v1/resource/999`
 
 **Response (404 Not Found):**
+
 ```json
 {
   "error": {
@@ -275,6 +282,7 @@ The FastAPI exception handlers map the following to the contract:
 ### Server Error
 
 **Response (500 Internal Server Error):**
+
 ```json
 {
   "error": {

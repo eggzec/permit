@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Initializing database pool")
-    pool = ConnectionPool(settings.DATABASE_DSN)
+    pool = ConnectionPool(str(settings.DATABASE_DSN))
 
     # Connectivity check
     try:
@@ -89,7 +89,9 @@ async def api_exception_handler(request: Request, exc: APIException):
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
     logger.warning(
-        f"API Exception: {exc.error_code} - {exc.message}",
+        "API Exception: %s - %s",
+        exc.error_code,
+        exc.message,
         extra={"request_id": request_id, "error_code": exc.error_code},
     )
 
@@ -125,7 +127,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         )
 
     logger.warning(
-        f"Validation Error: {len(details)} validation errors",
+        "Validation Error: %d validation errors",
+        len(details),
         extra={
             "request_id": request_id,
             "validation_errors": details,
@@ -155,7 +158,8 @@ async def general_exception_handler(request: Request, exc: Exception):
 
     # Log the full traceback server-side
     logger.exception(
-        f"Unexpected error: {str(exc)}",
+        "Unexpected error: %s",
+        str(exc),
         extra={"request_id": request_id},
     )
 

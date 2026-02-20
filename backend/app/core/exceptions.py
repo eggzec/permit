@@ -31,7 +31,7 @@ class ValidationException(APIException):
         super().__init__(
             error_code=ErrorCode.VALIDATION_FAILED,
             message=message,
-            http_status=400,
+            http_status=422,
             details=details,
         )
 

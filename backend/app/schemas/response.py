@@ -59,7 +59,7 @@ class ErrorResponse(BaseModel):
                 "error": {
                     "code": "VALIDATION_FAILED",
                     "message": "Invalid request parameters",
-                    "http_status": 400,
+                    "http_status": 422,
                     "details": [{"field": "email", "message": "Invalid email format"}],
                     "request_id": "req-123456789",
                 }
