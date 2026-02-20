@@ -32,7 +32,7 @@ def init() -> None:
     # Create a temporary pool for connectivity check
     pool = None
     try:
-        pool = ConnectionPool(settings.DATABASE_DSN)
+        pool = ConnectionPool(str(settings.DATABASE_DSN))
         with pool.connection() as conn:
             conn.execute("SELECT 1")
         logger.info("Database connectivity check successful")

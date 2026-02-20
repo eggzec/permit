@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Initializing database pool")
-    pool = ConnectionPool(settings.DATABASE_DSN)
+    pool = ConnectionPool(str(settings.DATABASE_DSN))
     
     # Connectivity check
     try:
