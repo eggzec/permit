@@ -1,7 +1,9 @@
 import uuid
 from contextlib import asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -22,7 +24,7 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Initializing database pool")
     pool = ConnectionPool(settings.DATABASE_DSN)
-
+    
     # Connectivity check
     try:
         with pool.connection() as conn:
@@ -32,12 +34,12 @@ async def lifespan(app: FastAPI):
         logger.exception("Database connectivity check failed")
         pool.close()
         raise RuntimeError("Database connectivity check failed") from e
-
+    
     app.state.db_pool = pool
     logger.info("Database pool initialized")
-
+    
     yield
-
+    
     # Shutdown
     logger.info("Closing database pool")
     pool.close()
@@ -81,6 +83,18 @@ async def add_request_id(request: Request, call_next):
 # ============================================================================
 # Exception Handlers
 # ============================================================================
+
+
+def get_request_id_from_context() -> str:
+    """Extract request_id from request context if available"""
+    try:
+        from fastapi import Request
+        from starlette.datastructures import Headers
+
+        # Fallback request_id
+        return str(uuid.uuid4())
+    except Exception:
+        return str(uuid.uuid4())
 
 
 @app.exception_handler(APIException)
@@ -173,3 +187,4 @@ async def general_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=error_response,
     )
+
