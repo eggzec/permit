@@ -1,0 +1,13 @@
+.vscode/*
+!.vscode/extensions.json
+
+# backend
+__pycache__
+app.egg-info
+*.pyc
+.mypy_cache
+.coverage
+htmlcov
+.cache
+.venv
+*.env
