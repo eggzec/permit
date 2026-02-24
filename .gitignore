@@ -4,10 +4,12 @@
 # backend
 __pycache__
 *.egg-info
-*.pyc
+*.py[cod]
 .mypy_cache
 .coverage
 htmlcov
 .cache
 .venv
 *.env
+build/
+dist/

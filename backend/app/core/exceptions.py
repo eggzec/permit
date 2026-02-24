@@ -1,4 +1,6 @@
-from typing import Any, Optional
+from typing import Any
+
+from starlette import status
 
 from app.schemas.response import ErrorCode
 
@@ -11,7 +13,7 @@ class APIException(Exception):
         error_code: ErrorCode,
         message: str,
         http_status: int,
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ):
         self.error_code = error_code
         self.message = message
@@ -26,12 +28,12 @@ class ValidationException(APIException):
     def __init__(
         self,
         message: str = "Invalid request parameters",
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ):
         super().__init__(
             error_code=ErrorCode.VALIDATION_FAILED,
             message=message,
-            http_status=422,
+            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             details=details,
         )
 
@@ -43,7 +45,7 @@ class AuthenticationException(APIException):
         super().__init__(
             error_code=ErrorCode.AUTH_INVALID,
             message=message,
-            http_status=401,
+            http_status=status.HTTP_401_UNAUTHORIZED,
         )
 
 
@@ -54,7 +56,7 @@ class AuthorizationException(APIException):
         super().__init__(
             error_code=ErrorCode.FORBIDDEN,
             message=message,
-            http_status=403,
+            http_status=status.HTTP_403_FORBIDDEN,
         )
 
 
@@ -65,7 +67,7 @@ class NotFoundException(APIException):
         super().__init__(
             error_code=ErrorCode.RESOURCE_NOT_FOUND,
             message=message,
-            http_status=404,
+            http_status=status.HTTP_404_NOT_FOUND,
         )
 
 
@@ -76,7 +78,7 @@ class ConflictException(APIException):
         super().__init__(
             error_code=ErrorCode.RESOURCE_CONFLICT,
             message=message,
-            http_status=409,
+            http_status=status.HTTP_409_CONFLICT,
         )
 
 
@@ -86,11 +88,22 @@ class BusinessLogicException(APIException):
     def __init__(
         self,
         message: str = "Business logic error",
-        details: Optional[list[dict[str, Any]]] = None,
+        details: list[dict[str, Any]] | None = None,
     ):
         super().__init__(
             error_code=ErrorCode.BUSINESS_LOGIC_ERROR,
             message=message,
-            http_status=422,
+            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             details=details,
+        )
+
+
+class ServiceUnavailableException(APIException):
+    """Service unavailable error"""
+
+    def __init__(self, message: str = "Service temporarily unavailable"):
+        super().__init__(
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            message=message,
+            http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
         )

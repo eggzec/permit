@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -41,7 +41,7 @@ class SuccessResponse(BaseModel, Generic[T]):
 class ErrorDetail(BaseModel):
     """Additional error details"""
 
-    field: Optional[str] = Field(None, description="Field name if validation error")
+    field: str | None = Field(None, description="Field name if validation error")
     message: str = Field(..., description="Detailed error message")
 
 
