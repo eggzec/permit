@@ -36,6 +36,7 @@ async def api_exception_handler(request: Request, exc: APIException) -> JSONResp
     return JSONResponse(
         status_code=exc.http_status,
         content=error_response,
+        headers={"X-Request-ID": request_id},
     )
 
 
@@ -77,6 +78,7 @@ async def validation_exception_handler(
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content=error_response,
+        headers={"X-Request-ID": request_id},
     )
 
 
@@ -104,4 +106,5 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content=error_response,
+        headers={"X-Request-ID": request_id},
     )
