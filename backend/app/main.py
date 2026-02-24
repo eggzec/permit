@@ -1,17 +1,19 @@
-import uuid
 from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, Request, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from fastapi.routing import APIRoute
 import logging
+
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
 
 from app.api.main import api_router
 from app.api.middlewares import add_request_id
 from app.core.config import settings
+from app.core.exception_handlers import (
+    api_exception_handler,
+    validation_exception_handler,
+    general_exception_handler,
+)
 from app.core.exceptions import APIException
-from app.schemas.response import ErrorCode
 from psycopg_pool import ConnectionPool
 
 
@@ -73,98 +75,6 @@ app.middleware("http")(add_request_id)
 # Exception Handlers
 # ============================================================================
 
-
-@app.exception_handler(APIException)
-async def api_exception_handler(request: Request, exc: APIException):
-    """Handle custom API exceptions"""
-    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-
-    logger.warning(
-        "API Exception: %s - %s",
-        exc.error_code,
-        exc.message,
-        extra={"request_id": request_id, "error_code": exc.error_code},
-    )
-
-    error_response = {
-        "error": {
-            "code": exc.error_code.value,
-            "message": exc.message,
-            "http_status": exc.http_status,
-            "details": exc.details,
-            "request_id": request_id,
-        }
-    }
-
-    return JSONResponse(
-        status_code=exc.http_status,
-        content=error_response,
-    )
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Handle Pydantic validation errors"""
-    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-
-    # Parse validation errors
-    details = []
-    for error in exc.errors():
-        details.append(
-            {
-                "field": ".".join(str(loc) for loc in error["loc"][1:]),
-                "message": error["msg"],
-            }
-        )
-
-    logger.warning(
-        "Validation Error: %d validation errors",
-        len(details),
-        extra={
-            "request_id": request_id,
-            "validation_errors": details,
-        },
-    )
-
-    error_response = {
-        "error": {
-            "code": ErrorCode.VALIDATION_FAILED.value,
-            "message": "Validation error",
-            "http_status": status.HTTP_422_UNPROCESSABLE_ENTITY,
-            "details": details,
-            "request_id": request_id,
-        }
-    }
-
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content=error_response,
-    )
-
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """Handle all uncaught exceptions"""
-    request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
-
-    # Log the full traceback server-side
-    logger.exception(
-        "Unexpected error: %s",
-        str(exc),
-        extra={"request_id": request_id},
-    )
-
-    error_response = {
-        "error": {
-            "code": ErrorCode.INTERNAL_SERVER_ERROR.value,
-            "message": "An unexpected error occurred",
-            "http_status": status.HTTP_500_INTERNAL_SERVER_ERROR,
-            "details": [],
-            "request_id": request_id,
-        }
-    }
-
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=error_response,
-    )
+app.add_exception_handler(APIException, api_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
