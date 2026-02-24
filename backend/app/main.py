@@ -64,16 +64,7 @@ app = FastAPI(
 
 app.include_router(api_router, prefix=API_V1_STR)
 
-# ============================================================================
-# Middlewares
-# ============================================================================
-
 app.middleware("http")(add_request_id)
-
-
-# ============================================================================
-# Exception Handlers
-# ============================================================================
 
 app.add_exception_handler(APIException, api_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)

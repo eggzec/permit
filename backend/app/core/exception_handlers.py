@@ -49,9 +49,11 @@ async def validation_exception_handler(
     # Parse validation errors
     details = []
     for error in exc.errors():
+        field_path = ".".join(str(loc) for loc in error["loc"][1:])
+        field = field_path if field_path else None
         details.append(
             {
-                "field": ".".join(str(loc) for loc in error["loc"][1:]),
+                "field": field,
                 "message": error["msg"],
             }
         )
