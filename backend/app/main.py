@@ -1,10 +1,19 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.routing import APIRoute
 import logging
 
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from fastapi.routing import APIRoute
+
 from app.api.main import api_router
+from app.api.middlewares import add_request_id
 from app.core.config import settings
+from app.core.exception_handlers import (
+    api_exception_handler,
+    validation_exception_handler,
+    general_exception_handler,
+)
+from app.core.exceptions import APIException
 from psycopg_pool import ConnectionPool
 
 
@@ -15,8 +24,8 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Initializing database pool")
-    pool = ConnectionPool(settings.DATABASE_DSN)
-    
+    pool = ConnectionPool(str(settings.DATABASE_DSN))
+
     # Connectivity check
     try:
         with pool.connection() as conn:
@@ -26,12 +35,12 @@ async def lifespan(app: FastAPI):
         logger.exception("Database connectivity check failed")
         pool.close()
         raise RuntimeError("Database connectivity check failed") from e
-    
+
     app.state.db_pool = pool
     logger.info("Database pool initialized")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Closing database pool")
     pool.close()
@@ -54,3 +63,9 @@ app = FastAPI(
 )
 
 app.include_router(api_router, prefix=API_V1_STR)
+
+app.middleware("http")(add_request_id)
+
+app.add_exception_handler(APIException, api_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, general_exception_handler)
