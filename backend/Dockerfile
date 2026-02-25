@@ -18,14 +18,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --frozen --no-install-workspace
 
-COPY ./pyproject.toml /app/
-
-COPY ./app /app/app
+COPY ./backend /app/backend/
 
 # Sync the project
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=backend/pyproject.toml,target=pyproject.toml \
     uv sync --frozen
 
 # Create and use a non-root user
@@ -33,6 +31,7 @@ RUN adduser --disabled-password --gecos "" appuser \
     && chown -R appuser:appuser /app
 
 USER appuser
+WORKDIR /app/backend/
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health').read()"]
