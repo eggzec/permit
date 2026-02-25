@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+**/__pycache__/
+**/*.egg-info
+**/*.py[cod]
+.mypy_cache
+.coverage*
+htmlcov
+.venv
+*.md
+**/*.md
+
+# Build artifacts and lock files
+# Note: keep `uv.lock` available for BuildKit bind-mounts used in the Dockerfile
+# (bind mounts are not filtered by .dockerignore during build), so do NOT ignore it here.
+
+# Environment files
+.env
+.env.*
