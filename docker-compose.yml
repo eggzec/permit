@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    restart: unless-stopped
     env_file: .env
     environment:
       - POSTGRES_SERVER=db
@@ -16,6 +17,7 @@ services:
 
   db:
     image: postgres:18.2-alpine3.23
+    restart: unless-stopped
     env_file: .env
     volumes:
       - postgres_data:/var/lib/postgresql
