@@ -53,8 +53,8 @@ class ErrorResponse(BaseModel):
         description="Error information containing code, message, http_status, details, and request_id",
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "error": {
                     "code": "VALIDATION_FAILED",
@@ -65,3 +65,4 @@ class ErrorResponse(BaseModel):
                 }
             }
         }
+    }
