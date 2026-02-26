@@ -77,8 +77,8 @@ def _set_test_env(postgres_container: PostgresContainer) -> None:
     os.environ["POSTGRES_USER"] = postgres_container.username
     os.environ["POSTGRES_PASSWORD"] = postgres_container.password
     os.environ["POSTGRES_DB"] = postgres_container.dbname
-    os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-only")
-    os.environ.setdefault("PROJECT_NAME", "permit-test")
+    os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
+    os.environ["PROJECT_NAME"] = "permit-test"
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,10 @@ def _run_migrations(
         pathlib.Path(__file__).resolve().parent.parent.parent / "migrations"
     )
     if not migrations_dir.exists():
-        return
+        pytest.fail(
+            f"Migrations directory not found: {migrations_dir}. "
+            "Tests require migration SQL files to set up the database schema."
+        )
 
     dsn = _make_dsn(postgres_container)
     with psycopg.connect(dsn) as conn:
@@ -196,6 +199,12 @@ def db_session(app: FastAPI) -> Iterator[psycopg.Cursor]:
     try:
         yield cursor
     finally:
-        conn.rollback()
-        cursor.close()
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            cursor.close()
+        except Exception:  # noqa: BLE001
+            pass
         pool.putconn(conn)

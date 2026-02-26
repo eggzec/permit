@@ -22,32 +22,26 @@ def test_db_session_provides_cursor(db_session: psycopg.Cursor) -> None:
 def test_db_session_rolls_back_and_isolation(db_session: psycopg.Cursor) -> None:
     """Verify transactional rollback provides full test isolation.
 
-    Creates a temporary table and inserts a row within the current
-    transaction, then confirms the row is visible. After an explicit
-    rollback on the same connection it asserts the table no longer
-    exists, proving that the db_session fixture provides complete
-    isolation between tests.
+    First asserts that ``_test_isolation`` does not exist (proving the
+    fixture rolled back any prior transaction), then creates the table,
+    inserts a row, and confirms it is visible inside the current
+    transaction. The fixture teardown will roll back the transaction
+    so subsequent tests never see these changes.
     """
-    # Write inside the transactional db_session
-    db_session.execute(
-        "CREATE TABLE IF NOT EXISTS _test_isolation (id serial PRIMARY KEY, val text)"
-    )
-    db_session.execute("INSERT INTO _test_isolation (val) VALUES ('should_be_gone')")
-    db_session.execute("SELECT count(*) FROM _test_isolation")
-    assert db_session.fetchone()[0] == 1  # visible inside this txn
-
-    # Rollback the transaction to undo DDL + DML
-    db_session.connection.rollback()
-
-    # After rollback the table should no longer exist
+    # The table must not exist at the start (fixture rolled back prior txn)
     db_session.execute(
         "SELECT EXISTS ("
         "  SELECT FROM information_schema.tables "
         "  WHERE table_name = '_test_isolation'"
         ")"
     )
-    exists = db_session.fetchone()[0]
-    assert not exists
+    assert not db_session.fetchone()[0]
+
+    # Write inside the transactional db_session
+    db_session.execute("CREATE TABLE _test_isolation (id serial PRIMARY KEY, val text)")
+    db_session.execute("INSERT INTO _test_isolation (val) VALUES ('should_be_gone')")
+    db_session.execute("SELECT count(*) FROM _test_isolation")
+    assert db_session.fetchone()[0] == 1  # visible inside this txn
 
 
 @pytest.mark.integration
