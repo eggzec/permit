@@ -11,6 +11,7 @@ Key fixtures:
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import AsyncIterator, Generator, Iterator
 
@@ -20,6 +21,8 @@ import pytest
 from fastapi import FastAPI
 from psycopg_pool import ConnectionPool
 from testcontainers.postgres import PostgresContainer
+
+logger = logging.getLogger(__name__)
 
 
 def _make_dsn(container: PostgresContainer) -> str:
@@ -193,18 +196,22 @@ def db_session(app: FastAPI) -> Iterator[psycopg.Cursor]:
     """
     pool: ConnectionPool = app.state.db_pool
     conn = pool.getconn()
-    # Disable autocommit so everything runs in one transaction
-    conn.autocommit = False
-    cursor = conn.cursor()
     try:
+        # Disable autocommit so everything runs in one transaction
+        conn.autocommit = False
+        cursor = conn.cursor()
         yield cursor
     finally:
         try:
             conn.rollback()
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug(
+                "conn.rollback() failed during db_session teardown", exc_info=True
+            )
         try:
             cursor.close()
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug(
+                "cursor.close() failed during db_session teardown", exc_info=True
+            )
         pool.putconn(conn)
