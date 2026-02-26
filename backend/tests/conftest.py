@@ -12,7 +12,7 @@ Key fixtures:
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Generator, Iterator
 
 import httpx
 import psycopg
@@ -43,30 +43,24 @@ def _make_dsn(container: PostgresContainer) -> str:
 # 1. Testcontainers - session-scoped Postgres
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session")
-def postgres_container(request: pytest.FixtureRequest) -> PostgresContainer:
+def postgres_container() -> Generator[PostgresContainer, None, None]:
     """Start a PostgreSQL container once for the entire test session.
 
-    The container is stopped automatically via a finalizer when the
-    session ends.
+    The container is stopped automatically when the session ends.
 
-    Args:
-        request: The pytest fixture request object used for teardown.
-
-    Returns:
+    Yields:
         A running PostgresContainer instance.
     """
     container = PostgresContainer("postgres:16-alpine")
     container.start()
-
-    def _stop() -> None:
+    try:
+        yield container
+    finally:
         container.stop()
-
-    request.addfinalizer(_stop)
-    return container
 
 
 # ---------------------------------------------------------------------------
-# 2. Inject test DB settings into environment (before importing app code)
+# 2. Environment variables for the test session
 # ---------------------------------------------------------------------------
 @pytest.fixture(scope="session", autouse=True)
 def _set_test_env(postgres_container: PostgresContainer) -> None:
@@ -126,20 +120,18 @@ def _run_migrations(
 def app(
     postgres_container: PostgresContainer,
     _run_migrations: None,
-    request: pytest.FixtureRequest,
-) -> FastAPI:
+) -> Generator[FastAPI, None, None]:
     """Return the FastAPI application with a test connection pool attached.
 
     Creates a ``ConnectionPool`` pointing at the Testcontainers Postgres
-    and assigns it to ``app.state.db_pool``. The pool is closed via a
-    finalizer when the session ends.
+    and assigns it to ``app.state.db_pool``. The pool is closed when the
+    session ends.
 
     Args:
         postgres_container: The running Testcontainers Postgres instance.
         _run_migrations: Ensures migrations have been applied first.
-        request: The pytest fixture request object used for teardown.
 
-    Returns:
+    Yields:
         The configured FastAPI application.
     """
     from app.main import app as _app  # imported after env vars are set
@@ -148,20 +140,18 @@ def app(
     dsn = _make_dsn(postgres_container)
     pool = ConnectionPool(dsn, open=True)
     _app.state.db_pool = pool
-
-    def _close_pool() -> None:
+    try:
+        yield _app
+    finally:
         pool.close()
 
-    request.addfinalizer(_close_pool)
-    return _app
-
 
 # ---------------------------------------------------------------------------
-# 5. Async HTTP test client
+# 5. Async HTTP client
 # ---------------------------------------------------------------------------
-@pytest.fixture()
+@pytest.fixture
 async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
-    """Provide an async HTTP client bound to the test application.
+    """Provide an async HTTP client wired to the FastAPI application.
 
     Uses ``httpx.ASGITransport`` so requests are handled in-process
     without needing a live server.
@@ -182,7 +172,7 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 # ---------------------------------------------------------------------------
 # 6. Per-test DB cursor with transactional rollback (full isolation)
 # ---------------------------------------------------------------------------
-@pytest.fixture()
+@pytest.fixture
 def db_session(app: FastAPI) -> Iterator[psycopg.Cursor]:
     """Provide a database cursor inside a transaction that auto-rolls back.
 

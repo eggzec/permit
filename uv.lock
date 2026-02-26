@@ -957,7 +957,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "coverage" },
-    { name = "httpx" },
     { name = "prek" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -981,7 +980,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "coverage", specifier = ">=7.4.3,<8.0.0" },
-    { name = "httpx", specifier = ">=0.25.1,<1.0.0" },
     { name = "prek", specifier = ">=0.2.24,<1.0.0" },
     { name = "pytest", specifier = ">=7.4.3,<8.0.0" },
     { name = "pytest-asyncio", specifier = ">=0.23.0" },

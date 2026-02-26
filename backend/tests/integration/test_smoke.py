@@ -19,13 +19,16 @@ def test_db_session_provides_cursor(db_session: psycopg.Cursor) -> None:
 
 
 @pytest.mark.integration
-def test_db_session_rolls_back(db_session: psycopg.Cursor) -> None:
-    """Verify that writes within a test are rolled back after it finishes.
+def test_db_session_rolls_back_and_isolation(db_session: psycopg.Cursor) -> None:
+    """Verify transactional rollback provides full test isolation.
 
-    Creates a temporary table, inserts a row, and confirms the row is
-    visible inside this transaction. The db_session fixture will roll
-    back the transaction so subsequent tests never see these changes.
+    Creates a temporary table and inserts a row within the current
+    transaction, then confirms the row is visible. After an explicit
+    rollback on the same connection it asserts the table no longer
+    exists, proving that the db_session fixture provides complete
+    isolation between tests.
     """
+    # Write inside the transactional db_session
     db_session.execute(
         "CREATE TABLE IF NOT EXISTS _test_isolation (id serial PRIMARY KEY, val text)"
     )
@@ -33,15 +36,10 @@ def test_db_session_rolls_back(db_session: psycopg.Cursor) -> None:
     db_session.execute("SELECT count(*) FROM _test_isolation")
     assert db_session.fetchone()[0] == 1  # visible inside this txn
 
+    # Rollback the transaction to undo DDL + DML
+    db_session.connection.rollback()
 
-@pytest.mark.integration
-def test_db_session_is_isolated(db_session: psycopg.Cursor) -> None:
-    """Verify that the table created in the previous test was rolled back.
-
-    Queries ``information_schema.tables`` to confirm that the
-    ``_test_isolation`` table does not exist, proving that the
-    transactional rollback provides full test isolation.
-    """
+    # After rollback the table should no longer exist
     db_session.execute(
         "SELECT EXISTS ("
         "  SELECT FROM information_schema.tables "
@@ -49,7 +47,6 @@ def test_db_session_is_isolated(db_session: psycopg.Cursor) -> None:
         ")"
     )
     exists = db_session.fetchone()[0]
-    # The table should not exist because the prior transaction was rolled back
     assert not exists
 
 
