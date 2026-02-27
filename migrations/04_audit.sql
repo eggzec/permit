@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS audit."auditLogVendorActors" (
     "vendorId"   UUID NOT NULL             REFERENCES public."vendors"("id")   ON DELETE RESTRICT
 );
 
-COMMENT ON TABLE  audit."auditLogVendorActors"        IS 'Junction table linking audit entry to vendor actor. Enforces at most one vendor actor per entry (PK). Pattern allows adding auditLogClientActors in v1.0 without migrating audit.auditLogs.';
+COMMENT ON TABLE  audit."auditLogVendorActors"              IS 'Junction table linking audit entry to vendor actor. Enforces at most one vendor actor per entry (PK). Pattern allows adding auditLogClientActors in v1.0 without migrating audit.auditLogs.';
 COMMENT ON COLUMN audit."auditLogVendorActors"."auditLogId" IS 'FK to audit log entry. Also the PK of this table.';
 COMMENT ON COLUMN audit."auditLogVendorActors"."vendorId"   IS 'Vendor who performed the action (FK). RESTRICT prevents vendor deletion while audit trail exists.';
 
@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS audit."auditLogLicenses" (
     "changes"    JSONB
 );
 
-COMMENT ON TABLE  audit."auditLogLicenses"         IS 'Junction table identifying license as affected resource. Stores mutation context in changes column.';
+COMMENT ON TABLE  audit."auditLogLicenses"              IS 'Junction table identifying license as affected resource. Stores mutation context in changes column.';
 COMMENT ON COLUMN audit."auditLogLicenses"."auditLogId" IS 'FK to audit log entry. Also the PK of this table.';
 COMMENT ON COLUMN audit."auditLogLicenses"."licenseId"  IS 'License affected by action (FK). RESTRICT prevents deletion while audit trail exists.';
 COMMENT ON COLUMN audit."auditLogLicenses"."changes"    IS 'Optional JSONB diff of license mutations (e.g. {"licenseStatusCode": {"from": "ACTIVE", "to": "REVOKED"}}). NULL for read-only actions.';
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS audit."auditLogSessions" (
     "changes"    JSONB
 );
 
-COMMENT ON TABLE  audit."auditLogSessions"        IS 'Junction table identifying session as affected resource. Stores mutation context in changes column.';
+COMMENT ON TABLE  audit."auditLogSessions"              IS 'Junction table identifying session as affected resource. Stores mutation context in changes column.';
 COMMENT ON COLUMN audit."auditLogSessions"."auditLogId" IS 'FK to audit log entry. Also the PK of this table.';
 COMMENT ON COLUMN audit."auditLogSessions"."sessionId"  IS 'Session affected by action (FK). RESTRICT prevents deletion while audit trail exists.';
 COMMENT ON COLUMN audit."auditLogSessions"."changes"    IS 'Optional JSONB diff of session mutations (e.g. {"sessionStatusCode": {"from": "ACTIVE", "to": "REVOKED"}}). NULL for read-only actions.';

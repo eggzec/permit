@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS "nodeLockedLicenseData" (
     CONSTRAINT "nodeLocked_maxSessions_positive" CHECK ("maxSessions" > 0)
 );
 
-COMMENT ON TABLE  "nodeLockedLicenseData"                IS 'Extension table for node-locked license subtype. Presence of row indicates license is node-locked. Future subtypes each get their own extension table; no type discriminator needed on licenses.';
+COMMENT ON TABLE  "nodeLockedLicenseData"                         IS 'Extension table for node-locked license subtype. Presence of row indicates license is node-locked. Future subtypes each get their own extension table; no type discriminator needed on licenses.';
 COMMENT ON COLUMN "nodeLockedLicenseData"."licenseId"             IS 'FK to and PK of parent license. Enforces strict 1:1 relationship. RESTRICT prevents parent deletion while extension exists.';
 COMMENT ON COLUMN "nodeLockedLicenseData"."licenseKey"            IS 'Cryptographically random activation key distributed to customer. Globally unique.';
 COMMENT ON COLUMN "nodeLockedLicenseData"."deviceFingerprintHash" IS 'SHA-256 hash of device identifiers (BIOS UUID + CPU serial + disk serial). Computed server-side. NULL until first activation; locked at first heartbeat.';
@@ -101,14 +101,14 @@ CREATE TABLE IF NOT EXISTS "sessions" (
     "metadata"              JSONB
 );
 
-COMMENT ON TABLE  "sessions"                       IS 'Active and historical sessions created via license activation. Mostly immutable after creation. Grace period computed at query time from MAX(heartbeats.heartbeatAt).';
+COMMENT ON TABLE  "sessions"                         IS 'Active and historical sessions created via license activation. Mostly immutable after creation. Grace period computed at query time from MAX(heartbeats.heartbeatAt).';
 COMMENT ON COLUMN "sessions"."id"                    IS 'Surrogate primary key (uuidv7, time-ordered).';
 COMMENT ON COLUMN "sessions"."licenseId"             IS 'License activated by this session (FK). Joined on every heartbeat to fetch maxGraceSecs, licenseStatusCode, expiresAt.';
 COMMENT ON COLUMN "sessions"."sessionStatusCode"     IS 'Stored lifecycle state (ACTIVE, REVOKED, ZOMBIE, CLEANUP). Derived states (grace exceeded, expired) computed at query time.';
-COMMENT ON COLUMN "sessions"."sessionToken"         IS 'Cryptographically random bearer token. Sole credential for heartbeat requests. Treat as secret.';
+COMMENT ON COLUMN "sessions"."sessionToken"          IS 'Cryptographically random bearer token. Sole credential for heartbeat requests. Treat as secret.';
 COMMENT ON COLUMN "sessions"."deviceFingerprintHash" IS 'Device fingerprint snapshot at session creation. Denormalized to eliminate JOIN on hot-path heartbeat validation.';
-COMMENT ON COLUMN "sessions"."createdAt"            IS 'Session creation timestamp (first activation timestamp for this device+license).';
-COMMENT ON COLUMN "sessions"."metadata"             IS 'Arbitrary session metadata at activation time (SDK version, OS, hostname, etc.). Immutable after creation. Platform does not interpret.';
+COMMENT ON COLUMN "sessions"."createdAt"             IS 'Session creation timestamp (first activation timestamp for this device+license).';
+COMMENT ON COLUMN "sessions"."metadata"              IS 'Arbitrary session metadata at activation time (SDK version, OS, hostname, etc.). Immutable after creation. Platform does not interpret.';
 
 -- ------------------------------------------------------------
 -- public."heartbeats"
@@ -131,12 +131,12 @@ CREATE TABLE IF NOT EXISTS "heartbeats" (
     PRIMARY KEY ("id", "heartbeatAt")
 ) PARTITION BY RANGE ("heartbeatAt");
 
-COMMENT ON TABLE  "heartbeats"                        IS 'Append-only time-series log of non-CONTINUE heartbeat events (errors, revocations, expirations, refresh triggers). Range-partitioned by heartbeatAt for efficient archival and partition pruning.';
-COMMENT ON COLUMN "heartbeats"."id"                   IS 'Unique identifier (uuidv7). Composite PK with heartbeatAt (required for partitioned table).';
-COMMENT ON COLUMN "heartbeats"."sessionId"            IS 'Session that emitted this event (FK). CASCADE deletion removes heartbeats during session cleanup.';
+COMMENT ON TABLE  "heartbeats"                           IS 'Append-only time-series log of non-CONTINUE heartbeat events (errors, revocations, expirations, refresh triggers). Range-partitioned by heartbeatAt for efficient archival and partition pruning.';
+COMMENT ON COLUMN "heartbeats"."id"                      IS 'Unique identifier (uuidv7). Composite PK with heartbeatAt (required for partitioned table).';
+COMMENT ON COLUMN "heartbeats"."sessionId"               IS 'Session that emitted this event (FK). CASCADE deletion removes heartbeats during session cleanup.';
 COMMENT ON COLUMN "heartbeats"."heartbeatRespStatusCode" IS 'Response code returned to SDK. Only non-CONTINUE responses logged here.';
-COMMENT ON COLUMN "heartbeats"."errorCode"            IS 'Error code if response was ERROR. NULL for non-error events (REFRESH, REVOKED, EXPIRED).';
-COMMENT ON COLUMN "heartbeats"."heartbeatAt"          IS 'Timestamp when event received. Partition key. BRIN index supports efficient time-range scans.';
+COMMENT ON COLUMN "heartbeats"."errorCode"               IS 'Error code if response was ERROR. NULL for non-error events (REFRESH, REVOKED, EXPIRED).';
+COMMENT ON COLUMN "heartbeats"."heartbeatAt"             IS 'Timestamp when event received. Partition key. BRIN index supports efficient time-range scans.';
 
 -- Partitions: pre-create 5 quarters covering 2026 and 2027 Q1.
 -- Add future partitions before the current quarter boundary.

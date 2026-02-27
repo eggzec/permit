@@ -8,5 +8,5 @@
 -- ============================================================
 
 DROP SCHEMA IF EXISTS audit CASCADE;
-
+DROP SCHEMA IF EXISTS public CASCADE;
 DROP SCHEMA IF EXISTS reference CASCADE;

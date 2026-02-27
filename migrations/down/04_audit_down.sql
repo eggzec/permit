@@ -8,10 +8,8 @@
 -- ============================================================
 
 DROP INDEX IF EXISTS audit."auditLogVendorActors_vendorId_idx";
+
 DROP TABLE IF EXISTS audit."auditLogVendorActors" CASCADE;
-
 DROP TABLE IF EXISTS audit."auditLogLicenses" CASCADE;
-
 DROP TABLE IF EXISTS audit."auditLogSessions" CASCADE;
-
 DROP TABLE IF EXISTS audit."auditLogs" CASCADE;

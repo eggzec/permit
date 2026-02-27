@@ -20,9 +20,6 @@ DROP TABLE IF EXISTS "heartbeats" CASCADE;
 
 -- Drop remaining business tables
 DROP TABLE IF EXISTS "nodeLockedLicenseData" CASCADE;
-
 DROP TABLE IF EXISTS "sessions" CASCADE;
-
 DROP TABLE IF EXISTS "licenses" CASCADE;
-
 DROP TABLE IF EXISTS "vendors" CASCADE;

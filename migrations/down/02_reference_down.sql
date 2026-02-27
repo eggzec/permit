@@ -9,11 +9,7 @@
 -- ============================================================
 
 DROP TABLE IF EXISTS reference."licenseStatuses" CASCADE;
-
 DROP TABLE IF EXISTS reference."sessionStatuses" CASCADE;
-
 DROP TABLE IF EXISTS reference."heartbeatRespStatuses" CASCADE;
-
 DROP TABLE IF EXISTS reference."errorCodes" CASCADE;
-
 DROP TABLE IF EXISTS reference."actions" CASCADE;

@@ -18,7 +18,7 @@
 -- ------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS reference."licenseStatuses" (
-    "code"        TEXT NOT NULL PRIMARY KEY,
+    "code"        TEXT PRIMARY KEY,
     "description" TEXT NOT NULL
 );
 
@@ -36,7 +36,7 @@ ON CONFLICT ("code") DO NOTHING;
 -- ------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS reference."sessionStatuses" (
-    "code"        TEXT NOT NULL PRIMARY KEY,
+    "code"        TEXT PRIMARY KEY,
     "description" TEXT NOT NULL
 );
 
@@ -56,7 +56,7 @@ ON CONFLICT ("code") DO NOTHING;
 -- ------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS reference."heartbeatRespStatuses" (
-    "code"        TEXT NOT NULL PRIMARY KEY,
+    "code"        TEXT PRIMARY KEY,
     "description" TEXT NOT NULL
 );
 
@@ -77,7 +77,7 @@ ON CONFLICT ("code") DO NOTHING;
 -- ------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS reference."errorCodes" (
-    "code"        TEXT NOT NULL PRIMARY KEY,
+    "code"        TEXT PRIMARY KEY,
     "description" TEXT NOT NULL
 );
 
@@ -105,7 +105,7 @@ ON CONFLICT ("code") DO NOTHING;
 -- ------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS reference."actions" (
-    "code"        TEXT NOT NULL PRIMARY KEY,
+    "code"        TEXT PRIMARY KEY,
     "description" TEXT NOT NULL
 );
 
