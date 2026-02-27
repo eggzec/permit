@@ -13,33 +13,36 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import AsyncIterator, Generator, Iterator
+from collections.abc import Generator
 
-import httpx
+
 import psycopg
 import pytest
-from fastapi import FastAPI
-from psycopg_pool import ConnectionPool
+from dotenv import load_dotenv
+from fastapi.testclient import TestClient
+
+
 from testcontainers.postgres import PostgresContainer
+from psycopg import connect
+
+# Load .env before importing app.main to ensure env vars are set
+dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+load_dotenv(dotenv_path)
+
+# noqa: E402 to allow imports after env setup
+from app.main import app  # noqa: E402
+from app.api.deps import get_db  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
 def _make_dsn(container: PostgresContainer) -> str:
-    """Build a psycopg3-compatible DSN from a Testcontainers instance.
-
-    Args:
-        container: A running PostgresContainer from Testcontainers.
-
-    Returns:
-        A connection string compatible with psycopg3.
-    """
-    host = container.get_container_host_ip()
-    port = container.get_exposed_port(5432)
-    return (
-        f"postgresql://{container.username}:{container.password}"
-        f"@{host}:{port}/{container.dbname}"
-    )
+    """Return the psycopg3-compatible DSN for the given Testcontainers instance."""
+    dsn = container.get_connection_url()
+    # Patch SQLAlchemy/Testcontainers DSN to psycopg3-compatible
+    if dsn.startswith("postgresql+psycopg2://"):
+        dsn = dsn.replace("postgresql+psycopg2://", "postgresql://", 1)
+    return dsn
 
 
 # ---------------------------------------------------------------------------
@@ -119,99 +122,29 @@ def _run_migrations(
             conn.execute(sql_file.read_text())
 
 
-# ---------------------------------------------------------------------------
-# 4. FastAPI app fixture
-# ---------------------------------------------------------------------------
-@pytest.fixture(scope="session")
-def app(
-    postgres_container: PostgresContainer,
-    _run_migrations: None,
-) -> Generator[FastAPI, None, None]:
-    """Return the FastAPI application with a test connection pool attached.
+@pytest.fixture(scope="module")
+def override_get_db():
+    migrations_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "migrations")
+    )
 
-    Creates a ``ConnectionPool`` pointing at the Testcontainers Postgres
-    and assigns it to ``app.state.db_pool``. The pool is closed when the
-    session ends.
-
-    Args:
-        postgres_container: The running Testcontainers Postgres instance.
-        _run_migrations: Ensures migrations have been applied first.
-
-    Yields:
-        The configured FastAPI application.
-    """
-    from app.main import app as _app  # imported after env vars are set
-
-    # Build a pool pointing at the Testcontainers Postgres
-    dsn = _make_dsn(postgres_container)
-    pool = ConnectionPool(dsn, open=True)
-    _app.state.db_pool = pool
-    try:
-        yield _app
-    finally:
-        pool.close()
-
-
-# ---------------------------------------------------------------------------
-# 5. Async HTTP client
-# ---------------------------------------------------------------------------
-@pytest.fixture
-async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
-    """Provide an async HTTP client wired to the FastAPI application.
-
-    Uses ``httpx.ASGITransport`` so requests are handled in-process
-    without needing a live server.
-
-    Args:
-        app: The FastAPI application instance.
-
-    Yields:
-        An ``httpx.AsyncClient`` ready to make requests.
-    """
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app),
-        base_url="http://testserver",
-    ) as ac:
-        yield ac
-
-
-# ---------------------------------------------------------------------------
-# 6. Per-test DB cursor with transactional rollback (full isolation)
-# ---------------------------------------------------------------------------
-@pytest.fixture
-def db_session(app: FastAPI) -> Iterator[psycopg.Cursor]:
-    """Provide a database cursor inside a transaction that auto-rolls back.
-
-    Acquires a connection from the pool, disables autocommit, and yields
-    a cursor. After the test (whether it passes or fails) the transaction
-    is rolled back and the connection is returned to the pool.
-
-    This guarantees every test starts with a deterministic database state.
-
-    Args:
-        app: The FastAPI application whose ``state.db_pool`` is used.
-
-    Yields:
-        A ``psycopg.Cursor`` operating inside a single transaction.
-    """
-    pool: ConnectionPool = app.state.db_pool
-    conn = pool.getconn()
-    try:
-        # Disable autocommit so everything runs in one transaction
-        conn.autocommit = False
-        cursor = conn.cursor()
-        yield cursor
-    finally:
-        try:
-            conn.rollback()
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "conn.rollback() failed during db_session teardown", exc_info=True
+    def _get_db():
+        with PostgresContainer("postgres:18.2-alpine3.23").with_volume_mapping(
+            migrations_dir, "/docker-entrypoint-initdb.d"
+        ) as container:
+            dsn = container.get_connection_url().replace(
+                "postgresql+psycopg2://", "postgresql://", 1
             )
-        try:
-            cursor.close()
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "cursor.close() failed during db_session teardown", exc_info=True
-            )
-        pool.putconn(conn)
+            with connect(dsn) as conn:
+                with conn.cursor() as cursor:
+                    yield cursor
+
+    app.dependency_overrides[get_db] = _get_db
+    yield
+    app.dependency_overrides.pop(get_db, None)
+
+
+@pytest.fixture(scope="function")
+def client(override_get_db):
+    with TestClient(app) as c:
+        yield c

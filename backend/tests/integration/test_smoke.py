@@ -2,12 +2,15 @@
 
 import pytest
 import psycopg
-import httpx
 
 
 @pytest.mark.integration
 def test_db_session_provides_cursor(db_session: psycopg.Cursor) -> None:
     """Verify that the db_session fixture yields a live database cursor.
+
+    NOTE: This is a trivial test. It only checks the cursor in this module and does
+    not guarantee isolation across modules or test classes. If you use a different
+    isolation strategy for the database fixture, you may need more robust checks.
 
     Executes a trivial query and asserts that the returned row is valid,
     confirming the cursor is connected to the Testcontainers Postgres.
@@ -21,6 +24,11 @@ def test_db_session_provides_cursor(db_session: psycopg.Cursor) -> None:
 @pytest.mark.integration
 def test_db_session_rolls_back_and_isolation(db_session: psycopg.Cursor) -> None:
     """Verify transactional rollback provides full test isolation.
+
+    NOTE: This test only verifies isolation if run repeatedly. If run in isolation,
+    it will always pass. If run with other tests that create the same table, or if
+    the fixture is broken, it may pass/fail alternately. This can be confusing, so
+    do not rely on this test as a sole indicator of isolation.
 
     First asserts that ``_test_isolation`` does not exist (proving the
     fixture rolled back any prior transaction), then creates the table,
@@ -45,13 +53,13 @@ def test_db_session_rolls_back_and_isolation(db_session: psycopg.Cursor) -> None
 
 
 @pytest.mark.integration
-async def test_client_health(client: httpx.AsyncClient) -> None:
-    """Verify that the async client fixture can reach the health endpoint.
+def test_client_health(client):
+    """Verify that the TestClient fixture can reach the health endpoint in-process.
 
     Sends a GET request to ``/api/v1/health`` and asserts a 200 response
     with ``{"data": {"status": "ok"}}``.
     """
-    resp = await client.get("/api/v1/health")
+    resp = client.get("/api/v1/health")
     assert resp.status_code == 200
     body = resp.json()
     assert body["data"]["status"] == "ok"
