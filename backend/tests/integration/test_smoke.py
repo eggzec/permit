@@ -2,6 +2,7 @@
 
 import pytest
 import psycopg
+from fastapi.testclient import TestClient
 
 
 @pytest.mark.integration
@@ -53,7 +54,7 @@ def test_db_session_rolls_back_and_isolation(db_session: psycopg.Cursor) -> None
 
 
 @pytest.mark.integration
-def test_client_health(client):
+def test_client_health(client: TestClient):
     """Verify that the TestClient fixture can reach the health endpoint in-process.
 
     Sends a GET request to ``/api/v1/health`` and asserts a 200 response

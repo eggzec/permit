@@ -23,7 +23,7 @@ dev = [
     "ruff<1.0.0,>=0.2.2",
     "prek>=0.2.24,<1.0.0",
     "coverage<8.0.0,>=7.4.3",
-    "pytest-xdist>=3.5.0,<4.0.0", # TODO: Remove when meaningful tests are added
+    "pytest-xdist>=3.5.0,<4.0.0", # tracked in ISSUE-1 (see backend/ISSUE-1.md)
 ]
 
 [build-system]

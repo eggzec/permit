@@ -11,6 +11,9 @@ Key fixtures:
 
 from __future__ import annotations
 
+import typing
+from psycopg import Cursor
+
 import logging
 import os
 from collections.abc import Generator
@@ -37,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 
 def _make_dsn(container: PostgresContainer) -> str:
-    """Return the psycopg3-compatible DSN for the given Testcontainers instance."""
     dsn = container.get_connection_url()
     # Patch SQLAlchemy/Testcontainers DSN to psycopg3-compatible
     if dsn.startswith("postgresql+psycopg2://"):
@@ -122,29 +124,36 @@ def _run_migrations(
             conn.execute(sql_file.read_text())
 
 
-@pytest.fixture(scope="module")
-def override_get_db():
-    migrations_dir = os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..", "..", "migrations")
-    )
+# Reuse the session-scoped postgres_container for override_get_db
 
-    def _get_db():
-        with PostgresContainer("postgres:18.2-alpine3.23").with_volume_mapping(
-            migrations_dir, "/docker-entrypoint-initdb.d"
-        ) as container:
-            dsn = container.get_connection_url().replace(
-                "postgresql+psycopg2://", "postgresql://", 1
-            )
-            with connect(dsn) as conn:
-                with conn.cursor() as cursor:
-                    yield cursor
+
+@pytest.fixture(scope="module")
+def override_get_db(postgres_container):
+    dsn = _make_dsn(postgres_container)
+
+    def _get_db() -> typing.Generator[Cursor, None, None]:
+        with connect(dsn) as conn:
+            with conn.cursor() as cursor:
+                yield cursor
 
     app.dependency_overrides[get_db] = _get_db
     yield
     app.dependency_overrides.pop(get_db, None)
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture
 def client(override_get_db):
     with TestClient(app) as c:
         yield c
+
+
+# Per-test db_session fixture for psycopg cursor with rollback
+@pytest.fixture
+def db_session(postgres_container) -> typing.Generator[Cursor, None, None]:
+    dsn = _make_dsn(postgres_container)
+    with connect(dsn, autocommit=False) as conn:
+        with conn.cursor() as cursor:
+            try:
+                yield cursor
+            finally:
+                conn.rollback()
