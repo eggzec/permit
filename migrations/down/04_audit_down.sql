@@ -1,15 +1,70 @@
 -- ============================================================
--- Downgrade: Audit Schema — Remove Immutable Audit Tables
--- PostgreSQL 18
--- Run order: 04_audit_down.sql (first in downgrade sequence)
+-- Downgrade : Audit Schema — Immutable Audit Tables
+-- Platform  : LaaS (License as a Service)
+-- Database  : PostgreSQL 18
+-- Run order : 04 — FIRST in the downgrade sequence
+-- Depends on: none — this file must run before all others
 -- ============================================================
--- Drops all audit tables and related indexes.
--- Run this BEFORE removing public schema tables.
+--
+-- PURPOSE
+--   Drops all audit tables, indexes, and the immutability
+--   trigger function created by 04_audit.sql.
+--   Must run first because audit tables hold FK references
+--   into app."vendors", app."licenses", and app."sessions".
+--
+-- IDEMPOTENCY
+--   Safe to re-run multiple times.
+--   • DROP TABLE    IF EXISTS — no error if already absent
+--   • DROP FUNCTION IF EXISTS — no error if already absent
+--
+-- TRANSACTION
+--   Wrapped in BEGIN / COMMIT — all-or-nothing.
+--
+-- REQUIRED PERMISSIONS
+--   • Ownership of the `audit` schema (audit_owner), OR
+--     SUPERUSER / database owner
+--
+-- CASCADE POLICY
+--   CASCADE is omitted from all DROP TABLE statements.
+--   Dropping each table automatically removes its associated
+--   indexes (no explicit index drops needed). FK constraints
+--   pointing TO audit tables from within this schema are
+--   removed as each table is dropped in dependency order.
+--
+-- TRIGGER FUNCTION
+--   audit.prevent_audit_update_delete() is dropped explicitly
+--   after all tables are removed (triggers referencing it are
+--   gone at that point). DROP TABLE does not remove standalone
+--   functions — omitting this step leaves an orphaned function.
 -- ============================================================
 
-DROP INDEX IF EXISTS audit."auditLogVendorActors_vendorId_idx";
+BEGIN;
 
-DROP TABLE IF EXISTS audit."auditLogVendorActors" CASCADE;
-DROP TABLE IF EXISTS audit."auditLogLicenses" CASCADE;
-DROP TABLE IF EXISTS audit."auditLogSessions" CASCADE;
-DROP TABLE IF EXISTS audit."auditLogs" CASCADE;
+-- ============================================================
+-- Drop audit junction tables first
+-- ============================================================
+-- Junction tables reference audit."audit_logs" and must be
+-- removed before the parent log table. Indexes on these
+-- tables are removed automatically by DROP TABLE.
+-- ============================================================
+
+DROP TABLE IF EXISTS audit."audit_log_vendor_actors";
+DROP TABLE IF EXISTS audit."audit_log_licenses";
+DROP TABLE IF EXISTS audit."audit_log_sessions";
+
+-- ============================================================
+-- Drop core audit log table
+-- ============================================================
+
+DROP TABLE IF EXISTS audit."audit_logs";
+
+-- ============================================================
+-- Drop immutability trigger function
+-- ============================================================
+-- Must be dropped after the tables whose triggers reference
+-- it are gone. The function signature must match exactly.
+-- ============================================================
+
+DROP FUNCTION IF EXISTS audit.prevent_audit_update_delete();
+
+COMMIT;

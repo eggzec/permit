@@ -2,32 +2,72 @@
 
 This directory contains the PostgreSQL 18 migration scripts for the LaaS (License as a Service) platform.
 
+---
+
 ## Migration Files
 
-Scripts are executed in alphabetical order by the Docker `postgres` image during container initialization.
+Scripts are executed in lexicographical order. Each file is idempotent (safe to re-run) and wrapped in a `BEGIN / COMMIT` transaction block.
 
-1. **`01_schemas.sql`**: Creates the `reference`, `public`, and `audit` schemas.
-2. **`02_reference.sql`**: Seeds lookup tables (statuses, error codes, actions).
-3. **`03_public.sql`**: Defines core business tables, partitions, and indexes.
-4. **`04_audit.sql`**: Sets up immutable audit trail tables with cross-schema references.
+| # | File | Description |
+|---|---|---|
+| 01 | `01_roles.sql` | Creates the `reference`, `app`, and `audit` schemas; defines all group roles; assigns schema ownership; sets default privileges. Must run first. |
+| 02 | `02_reference.sql` | Creates and seeds all static lookup tables (statuses, error codes, actions) in the `reference` schema. |
+| 03 | `03_app.sql` | Creates all core business tables (`vendors`, `licenses`, `node_locked_license_data`, `sessions`, `heartbeats`) in the `app` schema, including range partitions and indexes. |
+| 04 | `04_audit.sql` | Creates immutable audit trail tables in the `audit` schema and attaches `BEFORE UPDATE OR DELETE` triggers to enforce append-only semantics. |
+
+### Role & Schema Design
+
+All database objects are owned by dedicated group roles (`reference_owner`, `app_owner`, `audit_owner`). Login users are granted group roles and must activate them explicitly:
+
+```sql
+-- Per-transaction (recommended for connection pools):
+SET LOCAL ROLE app_reader_rls;   -- resets automatically at COMMIT / ROLLBACK
+
+-- Per-session (interactive use):
+SET ROLE app_reader_rls;
+RESET ROLE;
+
+-- Automatic at session start (single-role login users):
+ALTER ROLE <login_user> SET role TO 'app_reader_rls';
+```
+
+#### Group Roles Summary
+
+| Role | Schema | Privileges |
+|---|---|---|
+| `reference_owner` | reference | Owns all objects |
+| `reference_reader` | reference | SELECT on tables; EXECUTE on functions |
+| `reference_writer` | reference | INSERT, UPDATE on tables; USAGE/SELECT on sequences; EXECUTE on functions |
+| `audit_owner` | audit | Owns all objects |
+| `audit_writer` | audit | INSERT on tables; USAGE/SELECT on sequences; EXECUTE on functions |
+| `audit_reader` | audit | SELECT on tables; EXECUTE on functions |
+| `app_owner` | app | Owns all objects |
+| `app_reader_rls` | app | SELECT on tables/sequences (RLS applies); EXECUTE on functions |
+| `app_reader_bypass` | app | SELECT on tables/sequences (BYPASSRLS); EXECUTE on functions |
+| `app_writer` | app | INSERT, UPDATE on tables; USAGE/SELECT on sequences; EXECUTE on functions |
+| `app_deleter` | app | SELECT, DELETE on tables; EXECUTE on functions ⚠️ Grant with care — reserve for soft-delete or cleanup service accounts only |
+
+---
 
 ## Downgrade Scripts
 
-Downgrade scripts are located in the `down/` subdirectory and must be executed in **reverse order** of the migrations to safely remove all schema objects while respecting foreign key dependencies:
+Downgrade scripts are located in the `down/` subdirectory and must be executed in **reverse order** to safely remove all schema objects while respecting foreign key dependencies.
 
-1. **`04_audit_down.sql`**: Removes audit tables and indexes (first).
-2. **`03_public_down.sql`**: Removes business tables, partitions, and indexes (second).
-3. **`02_reference_down.sql`**: Removes reference lookup tables (third).
-4. **`01_schemas_down.sql`**: Removes schemas (last).
+| Order | File | Description |
+|---|---|---|
+| 1st | `04_audit_down.sql` | Removes audit tables, indexes, and trigger functions |
+| 2nd | `03_app_down.sql` | Removes business tables, partitions, and indexes |
+| 3rd | `02_reference_down.sql` | Removes reference lookup tables |
+| 4th | `01_roles_down.sql` | Removes schemas and all group roles |
 
-To downgrade the entire database, execute:
+To downgrade the entire database:
 
 ```bash
-# Note: These must be run in the exact order shown to respect FK constraints
-docker compose exec db psql -U postgres -d app -f /docker-entrypoint-initdb.d/down/04_audit_down.sql
-docker compose exec db psql -U postgres -d app -f /docker-entrypoint-initdb.d/down/03_public_down.sql
-docker compose exec db psql -U postgres -d app -f /docker-entrypoint-initdb.d/down/02_reference_down.sql
-docker compose exec db psql -U postgres -d app -f /docker-entrypoint-initdb.d/down/01_schemas_down.sql
+# Must be run in this exact order to respect FK constraints
+docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/04_audit_down.sql
+docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/03_app_down.sql
+docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/02_reference_down.sql
+docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/01_roles_down.sql
 ```
 
 ---
@@ -36,160 +76,113 @@ docker compose exec db psql -U postgres -d app -f /docker-entrypoint-initdb.d/do
 
 ```mermaid
 erDiagram
-    %% REFERENCE SCHEMA
-    reference_licenseStatuses {
-        text code
+    %% ── REFERENCE SCHEMA ─────────────────────────────────────
+    reference_license_statuses {
+        text code PK
         text description
     }
-    reference_sessionStatuses {
-        text code
+    reference_session_statuses {
+        text code PK
         text description
     }
-    reference_heartbeatRespStatuses {
-        text code
+    reference_heartbeat_resp_statuses {
+        text code PK
         text description
     }
-    reference_errorCodes {
-        text code
+    reference_error_codes {
+        text code PK
         text description
     }
     reference_actions {
-        text code
+        text code PK
         text description
     }
 
-    %% PUBLIC SCHEMA
-    public_vendors {
-        uuid id
+    %% ── APP SCHEMA ───────────────────────────────────────────
+    app_vendors {
+        uuid id PK
         text email
-        text passwordHash
-        timestamptz createdAt
-        timestamptz updatedAt
-        timestamptz deletedAt
+        text password_hash
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz deleted_at
     }
-    public_licenses {
-        uuid id
-        uuid vendorId
-        uuid clientId
-        text licenseStatusCode
-        timestamptz expiresAt
-        int maxGraceSecs
+    app_licenses {
+        uuid id PK
+        uuid vendor_id FK
+        uuid client_id
+        text license_status_code FK
+        timestamptz expires_at
+        int max_grace_secs
         jsonb metadata
-        timestamptz createdAt
-        timestamptz deletedAt
+        timestamptz created_at
+        timestamptz updated_at
+        timestamptz deleted_at
     }
-    public_nodeLockedLicenseData {
-        uuid licenseId
-        text licenseKey
-        text deviceFingerprintHash
-        int maxSessions
+    app_node_locked_license_data {
+        uuid license_id PK_FK
+        text license_key
+        text device_fingerprint_hash
+        int max_sessions
     }
-    public_sessions {
-        uuid id
-        uuid licenseId
-        text sessionStatusCode
-        text sessionToken
-        text deviceFingerprintHash
-        timestamptz createdAt
+    app_sessions {
+        uuid id PK
+        uuid license_id FK
+        text session_status_code FK
+        bytea session_token_hash
+        text device_fingerprint_hash
+        timestamptz created_at
+        timestamptz updated_at
         jsonb metadata
     }
-    public_heartbeats {
-        uuid id
-        uuid sessionId
-        text heartbeatRespStatusCode
-        text errorCode
-        timestamptz heartbeatAt
+    app_heartbeats {
+        uuid id PK
+        timestamptz heartbeat_at PK
+        uuid session_id FK
+        text heartbeat_resp_status_code FK
+        text error_code FK
     }
 
-
-    %% AUDIT SCHEMA
-    audit_auditLogs {
-        uuid id
-        text actionCode
-        inet ipAddress
-        text userAgent
-        timestamptz createdAt
+    %% ── AUDIT SCHEMA ─────────────────────────────────────────
+    audit_audit_logs {
+        uuid id PK
+        text action_code FK
+        inet ip_address
+        text user_agent
+        timestamptz created_at
     }
-    audit_auditLogVendorActors {
-        uuid auditLogId
-        uuid vendorId
+    audit_audit_log_vendor_actors {
+        uuid audit_log_id PK_FK
+        uuid vendor_id FK
     }
-    audit_auditLogLicenses {
-        uuid auditLogId
-        uuid licenseId
+    audit_audit_log_licenses {
+        uuid audit_log_id PK_FK
+        uuid license_id FK
         jsonb changes
     }
-    audit_auditLogSessions {
-        uuid auditLogId
-        uuid sessionId
+    audit_audit_log_sessions {
+        uuid audit_log_id PK_FK
+        uuid session_id FK
         jsonb changes
     }
 
-    %% RELATIONSHIPS
-    public_vendors ||--o{ public_licenses : owns
-    public_licenses ||--|| public_nodeLockedLicenseData : extends
-    public_licenses ||--o{ public_sessions : has
-    public_sessions ||--o{ public_heartbeats : emits
+    %% ── RELATIONSHIPS ────────────────────────────────────────
+    app_vendors                ||--o{ app_licenses                : "owns"
+    app_licenses               ||--o| app_node_locked_license_data   : "extends (1:1)"
+    app_licenses               ||--o{ app_sessions                : "has"
+    app_sessions               ||--o{ app_heartbeats              : "emits"
 
-    reference_licenseStatuses ||--o{ public_licenses : defines_status
-    reference_sessionStatuses ||--o{ public_sessions : defines_status
-    reference_heartbeatRespStatuses ||--o{ public_heartbeats : defines_result
-    reference_errorCodes ||--o{ public_heartbeats : defines_error
+    reference_license_statuses      ||--o{ app_licenses           : "defines status"
+    reference_session_statuses      ||--o{ app_sessions           : "defines status"
+    reference_heartbeat_resp_statuses ||--o{ app_heartbeats       : "defines response"
+    reference_error_codes           ||--o{ app_heartbeats         : "defines error"
 
-    reference_actions ||--o{ audit_auditLogs : defines_type
-    audit_auditLogs ||--|| audit_auditLogVendorActors : acts_as
-    audit_auditLogs ||--o| audit_auditLogLicenses : affects
-    audit_auditLogs ||--o| audit_auditLogSessions : affects
+    reference_actions              ||--o{ audit_audit_logs        : "defines action"
+    audit_audit_logs ||--o| audit_audit_log_vendor_actors         : "actor"
+    audit_audit_logs ||--o| audit_audit_log_licenses              : "affects"
+    audit_audit_logs ||--o| audit_audit_log_sessions              : "affects"
 
-    public_vendors ||--o{ audit_auditLogVendorActors : performs
-    public_licenses ||--o{ audit_auditLogLicenses : target
-    public_sessions ||--o{ audit_auditLogSessions : target
-```
-
----
-
-## Post-Migration Verification
-
-After the container starts, you can verify the deployment using the following commands:
-
-### 1. Verify Schemas and Tables
-
-```bash
-# Connect to the database (assuming 'app' db name and 'postgres' user)
-docker compose exec db psql -U postgres -d app -c "\dn"
-docker compose exec db psql -U postgres -d app -c "SELECT schemaname, tablename FROM pg_tables WHERE schemaname IN ('reference','public','audit') ORDER BY schemaname, tablename;"
-```
-
-### 2. Check Seed Data Counts
-
-```bash
-docker compose exec db psql -U postgres -d app -c "
-SELECT 'licenseStatuses: ' || COUNT(*) FROM reference.\"licenseStatuses\"
-UNION ALL SELECT 'sessionStatuses: ' || COUNT(*) FROM reference.\"sessionStatuses\"
-UNION ALL SELECT 'heartbeatRespStatuses: ' || COUNT(*) FROM reference.\"heartbeatRespStatuses\"
-UNION ALL SELECT 'errorCodes: ' || COUNT(*) FROM reference.\"errorCodes\"
-UNION ALL SELECT 'actions: ' || COUNT(*) FROM reference.\"actions\";"
-```
-
-### 3. Verify Heartbeat Partitions
-
-```bash
-docker compose exec db psql -U postgres -d app -c "SELECT tablename FROM pg_tables WHERE tablename LIKE 'heartbeats_%' ORDER BY tablename;"
-```
-
-### 4. Check UUIDv7 Defaults
-
-```bash
-docker compose exec db psql -U postgres -d app -c "SELECT table_name, column_name, column_default FROM information_schema.columns WHERE table_schema='public' AND column_name='id' AND table_name IN ('vendors', 'licenses', 'sessions');"
-```
-
-### 5. Inspect Seed Data Content
-
-```bash
-# View all registered statuses, error codes, and audit actions
-docker compose exec db psql -U postgres -d app -c "SELECT * FROM reference.\"licenseStatuses\" ORDER BY code;"
-docker compose exec db psql -U postgres -d app -c "SELECT * FROM reference.\"sessionStatuses\" ORDER BY code;"
-docker compose exec db psql -U postgres -d app -c "SELECT * FROM reference.\"heartbeatRespStatuses\" ORDER BY code;"
-docker compose exec db psql -U postgres -d app -c "SELECT code, description FROM reference.\"errorCodes\" ORDER BY code;"
-docker compose exec db psql -U postgres -d app -c "SELECT code, description FROM reference.\"actions\" ORDER BY code;"
+    app_vendors   ||--o{ audit_audit_log_vendor_actors            : "performs"
+    app_licenses  ||--o{ audit_audit_log_licenses                 : "target of"
+    app_sessions  ||--o{ audit_audit_log_sessions                 : "target of"
 ```
