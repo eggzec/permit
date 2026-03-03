@@ -11,12 +11,16 @@
 from __future__ import annotations
 
 import hashlib
+import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
 import pytest
+from psycopg import sql
+from testcontainers.core.waiting_utils import WaitStrategy, WaitStrategyTarget
 from testcontainers.postgres import PostgresContainer
 
 # ---------------------------------------------------------------------------
@@ -31,9 +35,11 @@ UP_MIGRATIONS = [
     "02_reference.sql",
     "03_app.sql",
     "04_audit.sql",
+    "05_rls.sql",
 ]
 
 DOWN_MIGRATIONS = [
+    "down/05_rls_down.sql",
     "down/04_audit_down.sql",
     "down/03_app_down.sql",
     "down/02_reference_down.sql",
@@ -54,6 +60,51 @@ ALL_GROUP_ROLES = [
     "app_deleter",
 ]
 
+
+class PgReadyWaitStrategy(WaitStrategy):
+    """
+    Polls `pg_isready -U <user>` inside the container on each tick.
+
+    On every iteration:
+      - Reloads container state. If it has exited with a non-zero code,
+        fetches the container logs immediately (before __exit__ removes the
+        container) and embeds them in the RuntimeError — no need to chase a
+        dead container with `docker logs`.
+      - If pg_isready exits 0, postgres is accepting connections — done.
+    """
+
+    def wait_until_ready(self, container: WaitStrategyTarget) -> None:
+        wrapped = container.get_wrapped_container()
+        user = container.username
+        start = time.time()
+
+        while True:
+            if time.time() - start > self._startup_timeout:
+                raise TimeoutError(
+                    f"Postgres did not become ready within {self._startup_timeout}s"
+                )
+
+            wrapped.reload()
+            state = wrapped.attrs["State"]
+
+            if state["Status"] == "exited" and state["ExitCode"] != 0:
+                # __enter__ raised → __exit__ never runs → container still exists.
+                # Grab logs now before the caller cleans up.
+                stdout, stderr = container.get_logs()
+                logs = (stdout + stderr).decode(errors="replace").strip()
+                raise RuntimeError(
+                    f"Postgres container exited with code {state['ExitCode']} — "
+                    f"likely a syntax error in a migration script.\n"
+                    f"--- container logs ---\n{logs}"
+                )
+
+            result = container.exec(f"pg_isready -U {user}")
+            if result.exit_code == 0:
+                return
+
+            time.sleep(self._poll_interval)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -63,9 +114,13 @@ ALL_GROUP_ROLES = [
 def migrated_db():
     # Session-scoped container. Migrations are auto-applied via
     # /docker-entrypoint-initdb.d. All read-only and additive tests share this.
-    with PostgresContainer(POSTGRES_IMAGE, driver=None).with_volume_mapping(
-        str(MIGRATIONS_DIR), "/docker-entrypoint-initdb.d", mode="ro"
-    ) as container:
+    with (
+        PostgresContainer(POSTGRES_IMAGE, driver=None)
+        .with_volume_mapping(
+            str(MIGRATIONS_DIR), "/docker-entrypoint-initdb.d", mode="ro"
+        )
+        .waiting_for(PgReadyWaitStrategy()) as container
+    ):
         yield container
 
 
@@ -86,9 +141,13 @@ def superconn(conn_url):
 def fresh_db():
     # Function-scoped container for destructive / down-migration tests.
     # Each test that tears down the schema gets its own clean container.
-    with PostgresContainer(POSTGRES_IMAGE, driver=None).with_volume_mapping(
-        str(MIGRATIONS_DIR), "/docker-entrypoint-initdb.d", mode="ro"
-    ) as container:
+    with (
+        PostgresContainer(POSTGRES_IMAGE, driver=None)
+        .with_volume_mapping(
+            str(MIGRATIONS_DIR), "/docker-entrypoint-initdb.d", mode="ro"
+        )
+        .waiting_for(PgReadyWaitStrategy()) as container
+    ):
         yield container
 
 
@@ -116,7 +175,6 @@ def apply_sql_file(container: PostgresContainer, filepath: Path) -> None:
     container_path = f"/docker-entrypoint-initdb.d/{relative}"
     user = container.username
     db = container.dbname
-
     exit_code, output = container.exec(
         f'psql -U {user} -d {db} -v ON_ERROR_STOP=1 -f "{container_path}"'
     )
@@ -208,7 +266,6 @@ def insert_heartbeat(
 
 
 def _make_audit_log(conn: psycopg.Connection) -> uuid.UUID:
-    # Insert a minimal audit_log row as audit_owner. Does NOT commit.
     conn.execute("SET LOCAL ROLE audit_owner")
     row = conn.execute(
         "INSERT INTO audit.\"audit_logs\" (action_code) VALUES ('CREATED') RETURNING id"
@@ -217,104 +274,172 @@ def _make_audit_log(conn: psycopg.Connection) -> uuid.UUID:
 
 
 def snapshot_db_state(container: PostgresContainer) -> str:
-    # Deterministic SHA-256 fingerprint of relevant DB state.
-    # Covers: schemas, tables/partitions, sequences, functions, triggers,
-    # indexes, constraints, roles, table/seq privileges, default ACLs, seed data.
     url = container.get_connection_url(driver=None)
     with psycopg.connect(url) as conn:
         parts: list[str] = []
 
-        schemas = conn.execute(
-            "SELECT nspname FROM pg_namespace "
-            "WHERE nspname IN ('reference','app','audit') ORDER BY 1"
-        ).fetchall()
-        parts.append(f"schemas={schemas}")
+        parts.append(
+            f"schemas={
+                conn.execute(
+                    'SELECT nspname FROM pg_namespace '
+                    "WHERE nspname IN ('reference','app','audit') ORDER BY 1"
+                ).fetchall()
+            }"
+        )
 
-        tables = conn.execute(
-            "SELECT n.nspname, c.relname, c.relkind, COALESCE(c.relispartition,false) "
-            "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') AND c.relkind IN ('r','p') "
-            "ORDER BY 1,2"
-        ).fetchall()
-        parts.append(f"tables={tables}")
+        parts.append(
+            f"tables={
+                conn.execute(
+                    'SELECT n.nspname, c.relname, c.relkind, COALESCE(c.relispartition,false) '
+                    'FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace '
+                    "WHERE n.nspname IN ('reference','app','audit') AND c.relkind IN ('r','p') "
+                    'ORDER BY 1,2'
+                ).fetchall()
+            }"
+        )
 
-        seqs = conn.execute(
-            "SELECT n.nspname, c.relname FROM pg_class c "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') AND c.relkind='S' ORDER BY 1,2"
-        ).fetchall()
-        parts.append(f"sequences={seqs}")
+        parts.append(
+            f"sequences={
+                conn.execute(
+                    'SELECT n.nspname, c.relname FROM pg_class c '
+                    'JOIN pg_namespace n ON n.oid=c.relnamespace '
+                    "WHERE n.nspname IN ('reference','app','audit') AND c.relkind='S' ORDER BY 1,2"
+                ).fetchall()
+            }"
+        )
 
-        funcs = conn.execute(
-            "SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) "
-            "FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
-            "WHERE n.nspname IN ('reference','app','audit') ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"functions={funcs}")
+        parts.append(
+            f"functions={
+                conn.execute(
+                    'SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) '
+                    'FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace '
+                    "WHERE n.nspname IN ('reference','app','audit') ORDER BY 1,2,3"
+                ).fetchall()
+            }"
+        )
 
-        triggers = conn.execute(
-            "SELECT n.nspname, c.relname, t.tgname, t.tgenabled "
-            "FROM pg_trigger t "
-            "JOIN pg_class c ON c.oid=t.tgrelid "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') AND NOT t.tgisinternal "
-            "ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"triggers={triggers}")
+        parts.append(
+            f"triggers={
+                conn.execute(
+                    'SELECT n.nspname, c.relname, t.tgname, t.tgenabled '
+                    'FROM pg_trigger t '
+                    'JOIN pg_class c ON c.oid=t.tgrelid '
+                    'JOIN pg_namespace n ON n.oid=c.relnamespace '
+                    "WHERE n.nspname IN ('reference','app','audit') AND NOT t.tgisinternal "
+                    'ORDER BY 1,2,3'
+                ).fetchall()
+            }"
+        )
 
-        indexes = conn.execute(
-            "SELECT n.nspname, c.relname, i.relname, ix.indisunique, ix.indisprimary "
-            "FROM pg_index ix "
-            "JOIN pg_class c ON c.oid=ix.indrelid "
-            "JOIN pg_class i ON i.oid=ix.indexrelid "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') "
-            "ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"indexes={indexes}")
+        parts.append(
+            f"indexes={
+                conn.execute(
+                    'SELECT n.nspname, c.relname, i.relname, ix.indisunique, ix.indisprimary '
+                    'FROM pg_index ix '
+                    'JOIN pg_class c ON c.oid=ix.indrelid '
+                    'JOIN pg_class i ON i.oid=ix.indexrelid '
+                    'JOIN pg_namespace n ON n.oid=c.relnamespace '
+                    "WHERE n.nspname IN ('reference','app','audit') "
+                    'ORDER BY 1,2,3'
+                ).fetchall()
+            }"
+        )
 
-        constraints = conn.execute(
-            "SELECT n.nspname, c.relname, con.conname, con.contype "
-            "FROM pg_constraint con "
-            "JOIN pg_class c ON c.oid=con.conrelid "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') "
-            "ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"constraints={constraints}")
+        parts.append(
+            f"constraints={
+                conn.execute(
+                    'SELECT n.nspname, c.relname, con.conname, con.contype '
+                    'FROM pg_constraint con '
+                    'JOIN pg_class c ON c.oid=con.conrelid '
+                    'JOIN pg_namespace n ON n.oid=c.relnamespace '
+                    "WHERE n.nspname IN ('reference','app','audit') "
+                    'ORDER BY 1,2,3'
+                ).fetchall()
+            }"
+        )
 
-        roles = conn.execute(
-            "SELECT rolname, rolinherit, rolcanlogin, rolbypassrls FROM pg_roles "
-            f"WHERE rolname IN ({','.join(repr(r) for r in ALL_GROUP_ROLES)}) "
-            "ORDER BY rolname"
-        ).fetchall()
-        parts.append(f"roles={roles}")
+        parts.append(
+            f"roles={
+                conn.execute(
+                    'SELECT rolname, rolinherit, rolcanlogin, rolbypassrls FROM pg_roles '
+                    'WHERE rolname = ANY(%s) ORDER BY rolname',
+                    (ALL_GROUP_ROLES,),
+                ).fetchall()
+            }"
+        )
 
-        table_privs = conn.execute(
-            "SELECT grantee, table_schema, table_name, privilege_type "
-            "FROM information_schema.role_table_grants "
-            "WHERE table_schema IN ('reference','app','audit') "
-            "ORDER BY grantee, table_schema, table_name, privilege_type"
-        ).fetchall()
-        parts.append(f"table_privs={table_privs}")
+        parts.append(
+            f"table_privs={
+                conn.execute(
+                    'SELECT grantee, table_schema, table_name, privilege_type '
+                    'FROM information_schema.role_table_grants '
+                    "WHERE table_schema IN ('reference','app','audit') "
+                    'ORDER BY grantee, table_schema, table_name, privilege_type'
+                ).fetchall()
+            }"
+        )
 
-        seq_privs = conn.execute(
-            "SELECT grantee, object_schema, object_name, privilege_type "
-            "FROM information_schema.usage_privileges "
-            "WHERE object_type='SEQUENCE' AND object_schema IN ('reference','app','audit') "
-            "ORDER BY grantee, object_schema, object_name, privilege_type"
-        ).fetchall()
-        parts.append(f"seq_privs={seq_privs}")
+        parts.append(
+            f"seq_privs={
+                conn.execute(
+                    'SELECT grantee, object_schema, object_name, privilege_type '
+                    'FROM information_schema.usage_privileges '
+                    "WHERE object_type='SEQUENCE' AND object_schema IN ('reference','app','audit') "
+                    'ORDER BY grantee, object_schema, object_name, privilege_type'
+                ).fetchall()
+            }"
+        )
 
-        default_acls = conn.execute(
-            "SELECT r.rolname, n.nspname, da.defaclobjtype, da.defaclacl "
-            "FROM pg_default_acl da "
-            "JOIN pg_roles r ON r.oid=da.defaclrole "
-            "LEFT JOIN pg_namespace n ON n.oid=da.defaclnamespace "
-            "WHERE r.rolname IN ('reference_owner','audit_owner','app_owner') "
-            "ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"default_acls={default_acls}")
+        parts.append(
+            f"default_acls={
+                conn.execute(
+                    'SELECT r.rolname, n.nspname, da.defaclobjtype, da.defaclacl '
+                    'FROM pg_default_acl da '
+                    'JOIN pg_roles r ON r.oid=da.defaclrole '
+                    'LEFT JOIN pg_namespace n ON n.oid=da.defaclnamespace '
+                    "WHERE r.rolname IN ('reference_owner','audit_owner','app_owner') "
+                    'ORDER BY 1,2,3'
+                ).fetchall()
+            }"
+        )
+
+        # RLS: per-table enablement flag
+        parts.append(
+            f"rls_enabled={
+                conn.execute(
+                    'SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity '
+                    'FROM pg_class c '
+                    'JOIN pg_namespace n ON n.oid = c.relnamespace '
+                    "WHERE n.nspname = 'app' AND c.relkind IN ('r','p') "
+                    'ORDER BY c.relname'
+                ).fetchall()
+            }"
+        )
+
+        # RLS: policy definitions (name, command, qual, with_check)
+        parts.append(
+            f"rls_policies={
+                conn.execute(
+                    'SELECT schemaname, tablename, policyname, permissive, '
+                    '       roles, cmd, qual, with_check '
+                    'FROM pg_policies '
+                    "WHERE schemaname = 'app' "
+                    'ORDER BY tablename, policyname'
+                ).fetchall()
+            }"
+        )
+
+        # RLS: EXECUTE grant on set_app_context
+        parts.append(
+            f"rls_func_grants={
+                conn.execute(
+                    'SELECT grantee, privilege_type '
+                    'FROM information_schema.routine_privileges '
+                    "WHERE routine_schema = 'app' AND routine_name = 'set_app_context' "
+                    'ORDER BY grantee'
+                ).fetchall()
+            }"
+        )
 
         for tbl in [
             "license_statuses",
@@ -330,11 +455,175 @@ def snapshot_db_state(container: PostgresContainer) -> str:
             ).fetchone()[0]
             if exists:
                 rows = conn.execute(
-                    f'SELECT * FROM reference."{tbl}" ORDER BY 1'
+                    sql.SQL("SELECT * FROM reference.{} ORDER BY 1").format(
+                        sql.Identifier(tbl)
+                    )
                 ).fetchall()
                 parts.append(f"reference.{tbl}={rows}")
 
         return hashlib.sha256("\n".join(str(p) for p in parts).encode()).hexdigest()
+
+
+def snapshot_db_state_parts(container: PostgresContainer) -> dict[str, str]:
+    """Field-by-field version of snapshot_db_state for diff diagnostics."""
+    url = container.get_connection_url(driver=None)
+    with psycopg.connect(url) as conn:
+        parts: dict[str, str] = {}
+
+        parts["schemas"] = str(
+            conn.execute(
+                "SELECT nspname FROM pg_namespace "
+                "WHERE nspname IN ('reference','app','audit') ORDER BY 1"
+            ).fetchall()
+        )
+
+        parts["tables"] = str(
+            conn.execute(
+                "SELECT n.nspname, c.relname, c.relkind, COALESCE(c.relispartition,false) "
+                "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname IN ('reference','app','audit') AND c.relkind IN ('r','p') "
+                "ORDER BY 1,2"
+            ).fetchall()
+        )
+
+        parts["sequences"] = str(
+            conn.execute(
+                "SELECT n.nspname, c.relname FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname IN ('reference','app','audit') AND c.relkind='S' ORDER BY 1,2"
+            ).fetchall()
+        )
+
+        parts["functions"] = str(
+            conn.execute(
+                "SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) "
+                "FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+                "WHERE n.nspname IN ('reference','app','audit') ORDER BY 1,2,3"
+            ).fetchall()
+        )
+
+        parts["triggers"] = str(
+            conn.execute(
+                "SELECT n.nspname, c.relname, t.tgname, t.tgenabled "
+                "FROM pg_trigger t "
+                "JOIN pg_class c ON c.oid=t.tgrelid "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname IN ('reference','app','audit') AND NOT t.tgisinternal "
+                "ORDER BY 1,2,3"
+            ).fetchall()
+        )
+
+        parts["indexes"] = str(
+            conn.execute(
+                "SELECT n.nspname, c.relname, i.relname, ix.indisunique, ix.indisprimary "
+                "FROM pg_index ix "
+                "JOIN pg_class c ON c.oid=ix.indrelid "
+                "JOIN pg_class i ON i.oid=ix.indexrelid "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname IN ('reference','app','audit') "
+                "ORDER BY 1,2,3"
+            ).fetchall()
+        )
+
+        parts["constraints"] = str(
+            conn.execute(
+                "SELECT n.nspname, c.relname, con.conname, con.contype "
+                "FROM pg_constraint con "
+                "JOIN pg_class c ON c.oid=con.conrelid "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname IN ('reference','app','audit') "
+                "ORDER BY 1,2,3"
+            ).fetchall()
+        )
+
+        parts["roles"] = str(
+            conn.execute(
+                "SELECT rolname, rolinherit, rolcanlogin, rolbypassrls FROM pg_roles "
+                "WHERE rolname = ANY(%s) ORDER BY rolname",
+                (ALL_GROUP_ROLES,),
+            ).fetchall()
+        )
+
+        parts["table_privs"] = str(
+            conn.execute(
+                "SELECT grantee, table_schema, table_name, privilege_type "
+                "FROM information_schema.role_table_grants "
+                "WHERE table_schema IN ('reference','app','audit') "
+                "ORDER BY grantee, table_schema, table_name, privilege_type"
+            ).fetchall()
+        )
+
+        parts["seq_privs"] = str(
+            conn.execute(
+                "SELECT grantee, object_schema, object_name, privilege_type "
+                "FROM information_schema.usage_privileges "
+                "WHERE object_type='SEQUENCE' AND object_schema IN ('reference','app','audit') "
+                "ORDER BY grantee, object_schema, object_name, privilege_type"
+            ).fetchall()
+        )
+
+        parts["default_acls"] = str(
+            conn.execute(
+                "SELECT r.rolname, n.nspname, da.defaclobjtype, da.defaclacl "
+                "FROM pg_default_acl da "
+                "JOIN pg_roles r ON r.oid=da.defaclrole "
+                "LEFT JOIN pg_namespace n ON n.oid=da.defaclnamespace "
+                "WHERE r.rolname IN ('reference_owner','audit_owner','app_owner') "
+                "ORDER BY 1,2,3"
+            ).fetchall()
+        )
+
+        parts["rls_enabled"] = str(
+            conn.execute(
+                "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
+                "FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = 'app' AND c.relkind IN ('r','p') "
+                "ORDER BY c.relname"
+            ).fetchall()
+        )
+
+        parts["rls_policies"] = str(
+            conn.execute(
+                "SELECT schemaname, tablename, policyname, permissive, "
+                "       roles, cmd, qual, with_check "
+                "FROM pg_policies "
+                "WHERE schemaname = 'app' "
+                "ORDER BY tablename, policyname"
+            ).fetchall()
+        )
+
+        parts["rls_func_grants"] = str(
+            conn.execute(
+                "SELECT grantee, privilege_type "
+                "FROM information_schema.routine_privileges "
+                "WHERE routine_schema = 'app' AND routine_name = 'set_app_context' "
+                "ORDER BY grantee"
+            ).fetchall()
+        )
+
+        for tbl in [
+            "license_statuses",
+            "session_statuses",
+            "heartbeat_resp_statuses",
+            "error_codes",
+            "actions",
+        ]:
+            exists = conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema='reference' AND table_name=%s)",
+                (tbl,),
+            ).fetchone()[0]
+            if exists:
+                parts[f"reference.{tbl}"] = str(
+                    conn.execute(
+                        sql.SQL("SELECT * FROM reference.{} ORDER BY 1").format(
+                            sql.Identifier(tbl)
+                        )
+                    ).fetchall()
+                )
+
+        return parts
 
 
 # ===========================================================================
@@ -342,96 +631,96 @@ def snapshot_db_state(container: PostgresContainer) -> str:
 # ===========================================================================
 
 
-def test_01_schemas_exist(conn_url):
+@pytest.mark.parametrize("schema", ["app", "audit", "reference"])
+def test_01_schema_exists(conn_url, schema):
     with psycopg.connect(conn_url) as conn:
-        schemas = [
-            r[0]
-            for r in conn.execute(
-                "SELECT nspname FROM pg_namespace "
-                "WHERE nspname IN ('reference','app','audit') ORDER BY 1"
-            ).fetchall()
-        ]
-    assert schemas == ["app", "audit", "reference"]
+        row = conn.execute(
+            "SELECT 1 FROM pg_namespace WHERE nspname = %s",
+            (schema,),
+        ).fetchone()
+    assert row is not None, f"Schema '{schema}' does not exist"
 
 
-def test_02_reference_tables_exist(conn_url):
-    with psycopg.connect(conn_url) as conn:
-        tables = [
-            r[0]
-            for r in conn.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema='reference' ORDER BY table_name"
-            ).fetchall()
-        ]
-    expected = [
+@pytest.mark.parametrize(
+    "table",
+    [
         "actions",
         "error_codes",
         "heartbeat_resp_statuses",
         "license_statuses",
         "session_statuses",
-    ]
-    assert all(t in tables for t in expected)
-
-
-def test_03_app_tables_exist(conn_url):
+    ],
+)
+def test_02_reference_table_exists(conn_url, table):
     with psycopg.connect(conn_url) as conn:
-        tables = [
-            r[0]
-            for r in conn.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema='app' ORDER BY table_name"
-            ).fetchall()
-        ]
-    expected = [
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='reference' AND table_name=%s",
+            (table,),
+        ).fetchone()
+    assert row is not None, f"Table reference.{table} does not exist"
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
         "heartbeats",
         "licenses",
         "node_locked_license_data",
         "sessions",
         "vendors",
-    ]
-    assert all(t in tables for t in expected)
-
-
-def test_04_audit_tables_exist(conn_url):
+    ],
+)
+def test_03_app_table_exists(conn_url, table):
     with psycopg.connect(conn_url) as conn:
-        tables = [
-            r[0]
-            for r in conn.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema='audit' ORDER BY table_name"
-            ).fetchall()
-        ]
-    expected = [
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='app' AND table_name=%s",
+            (table,),
+        ).fetchone()
+    assert row is not None, f"Table app.{table} does not exist"
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
         "audit_log_licenses",
         "audit_log_sessions",
         "audit_log_vendor_actors",
         "audit_logs",
-    ]
-    assert all(t in tables for t in expected)
-
-
-def test_05_heartbeat_partitions_exist(conn_url):
-    # Filters relkind='r' to exclude partition indexes (which also have
-    # relispartition=true but relkind='i').
+    ],
+)
+def test_04_audit_table_exists(conn_url, table):
     with psycopg.connect(conn_url) as conn:
-        partitions = [
-            r[0]
-            for r in conn.execute(
-                "SELECT c.relname FROM pg_class c "
-                "JOIN pg_namespace n ON n.oid=c.relnamespace "
-                "WHERE n.nspname='app' AND c.relkind='r' AND c.relispartition=true "
-                "ORDER BY c.relname"
-            ).fetchall()
-        ]
-    expected = [
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema='audit' AND table_name=%s",
+            (table,),
+        ).fetchone()
+    assert row is not None, f"Table audit.{table} does not exist"
+
+
+@pytest.mark.parametrize(
+    "partition",
+    [
         "heartbeats_2026_q1",
         "heartbeats_2026_q2",
         "heartbeats_2026_q3",
         "heartbeats_2026_q4",
         "heartbeats_2027_q1",
         "heartbeats_default",
-    ]
-    assert partitions == expected
+    ],
+)
+def test_05_heartbeat_partition_exists(conn_url, partition):
+    with psycopg.connect(conn_url) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname='app' AND c.relkind='r' "
+            "AND c.relispartition=true AND c.relname=%s",
+            (partition,),
+        ).fetchone()
+    assert row is not None, f"Heartbeat partition '{partition}' does not exist"
 
 
 # ===========================================================================
@@ -440,12 +729,23 @@ def test_05_heartbeat_partitions_exist(conn_url):
 
 
 def test_06_up_migrations_are_idempotent(migrated_db):
-    state_before = snapshot_db_state(migrated_db)
+    before = snapshot_db_state_parts(migrated_db)
     for f in UP_MIGRATIONS:
         apply_sql_file(migrated_db, MIGRATIONS_DIR / f)
-    state_after = snapshot_db_state(migrated_db)
-    assert state_after == state_before, (
-        "DB state changed after re-running up migrations"
+    after = snapshot_db_state_parts(migrated_db)
+
+    diffs = {k: (before[k], after[k]) for k in before if before[k] != after.get(k)}
+    for k in after:
+        if k not in before:
+            diffs[k] = ("<missing>", after[k])
+
+    assert not diffs, (
+        "DB state changed after re-running up migrations.\n"
+        "Fields that differ:\n"
+        + "\n".join(
+            f"\n  [{field}]\n    BEFORE: {v_before}\n    AFTER:  {v_after}"
+            for field, (v_before, v_after) in diffs.items()
+        )
     )
 
 
@@ -454,28 +754,26 @@ def test_06_up_migrations_are_idempotent(migrated_db):
 # ===========================================================================
 
 
-def test_07_all_roles_exist(conn_url):
+@pytest.mark.parametrize("role", ALL_GROUP_ROLES)
+def test_07_role_exists(conn_url, role):
     with psycopg.connect(conn_url) as conn:
-        roles = [
-            r[0]
-            for r in conn.execute(
-                f"SELECT rolname FROM pg_roles "
-                f"WHERE rolname IN ({','.join(repr(r) for r in ALL_GROUP_ROLES)}) "
-                f"ORDER BY rolname"
-            ).fetchall()
-        ]
-    assert sorted(roles) == sorted(ALL_GROUP_ROLES)
+        row = conn.execute(
+            "SELECT 1 FROM pg_roles WHERE rolname = %s",
+            (role,),
+        ).fetchone()
+    assert row is not None, f"Role '{role}' does not exist"
 
 
-def test_08_roles_are_nologin_noinherit(conn_url):
+@pytest.mark.parametrize("role", ALL_GROUP_ROLES)
+def test_08_role_is_nologin_noinherit(conn_url, role):
     with psycopg.connect(conn_url) as conn:
-        rows = conn.execute(
-            f"SELECT rolname, rolinherit, rolcanlogin FROM pg_roles "
-            f"WHERE rolname IN ({','.join(repr(r) for r in ALL_GROUP_ROLES)})"
-        ).fetchall()
-    for rolname, inherit, login in rows:
-        assert inherit is False, f"{rolname}: expected NOINHERIT"
-        assert login is False, f"{rolname}: expected NOLOGIN"
+        row = conn.execute(
+            "SELECT rolinherit, rolcanlogin FROM pg_roles WHERE rolname = %s",
+            (role,),
+        ).fetchone()
+    assert row is not None, f"Role '{role}' not found"
+    assert row[0] is False, f"{role}: expected NOINHERIT"
+    assert row[1] is False, f"{role}: expected NOLOGIN"
 
 
 def test_09_app_reader_bypass_has_bypassrls(conn_url):
@@ -486,15 +784,17 @@ def test_09_app_reader_bypass_has_bypassrls(conn_url):
     assert row is not None and row[0] is True
 
 
-def test_10_non_bypass_roles_have_no_bypassrls(conn_url):
-    non_bypass = [r for r in ALL_GROUP_ROLES if r != "app_reader_bypass"]
+@pytest.mark.parametrize(
+    "role", [r for r in ALL_GROUP_ROLES if r != "app_reader_bypass"]
+)
+def test_10_role_has_no_bypassrls(conn_url, role):
     with psycopg.connect(conn_url) as conn:
-        rows = conn.execute(
-            f"SELECT rolname, rolbypassrls FROM pg_roles "
-            f"WHERE rolname IN ({','.join(repr(r) for r in non_bypass)})"
-        ).fetchall()
-    for rolname, bypassrls in rows:
-        assert bypassrls is False, f"{rolname} should not have BYPASSRLS"
+        row = conn.execute(
+            "SELECT rolbypassrls FROM pg_roles WHERE rolname = %s",
+            (role,),
+        ).fetchone()
+    assert row is not None, f"Role '{role}' not found"
+    assert row[0] is False, f"{role} should not have BYPASSRLS"
 
 
 # ===========================================================================
@@ -502,37 +802,32 @@ def test_10_non_bypass_roles_have_no_bypassrls(conn_url):
 # ===========================================================================
 
 
-def test_11_license_statuses_seed(conn_url):
-    with psycopg.connect(conn_url) as conn:
-        rows = conn.execute(
-            'SELECT code FROM reference."license_statuses" ORDER BY code'
-        ).fetchall()
-    assert [r[0] for r in rows] == ["ACTIVE", "REVOKED"]
-
-
-def test_12_session_statuses_seed(conn_url):
-    with psycopg.connect(conn_url) as conn:
-        codes = [
-            r[0]
-            for r in conn.execute(
-                'SELECT code FROM reference."session_statuses" ORDER BY code'
-            ).fetchall()
-        ]
-    assert sorted(codes) == ["ACTIVE", "CLEANUP", "REVOKED", "ZOMBIE"]
-
-
-def test_13_heartbeat_resp_statuses_seed(conn_url):
+@pytest.mark.parametrize(
+    "table_name,expected_codes",
+    [
+        ("license_statuses", ["ACTIVE", "REVOKED"]),
+        ("session_statuses", ["ACTIVE", "CLEANUP", "REVOKED", "ZOMBIE"]),
+        (
+            "heartbeat_resp_statuses",
+            ["CONTINUE", "ERROR", "EXPIRED", "REFRESH", "REVOKED"],
+        ),
+    ],
+)
+def test_11_seed_data_codes(conn_url, table_name, expected_codes):
+    """Verify reference table seed data contains expected codes."""
     with psycopg.connect(conn_url) as conn:
         codes = [
             r[0]
             for r in conn.execute(
-                'SELECT code FROM reference."heartbeat_resp_statuses" ORDER BY code'
+                sql.SQL("SELECT code FROM reference.{} ORDER BY code").format(
+                    sql.Identifier(table_name)
+                )
             ).fetchall()
         ]
-    assert sorted(codes) == ["CONTINUE", "ERROR", "EXPIRED", "REFRESH", "REVOKED"]
+    assert sorted(codes) == sorted(expected_codes)
 
 
-def test_14_error_codes_seed_count(conn_url):
+def test_12_error_codes_seed_count(conn_url):
     with psycopg.connect(conn_url) as conn:
         count = conn.execute('SELECT COUNT(*) FROM reference."error_codes"').fetchone()[
             0
@@ -540,14 +835,15 @@ def test_14_error_codes_seed_count(conn_url):
     assert count == 12
 
 
-def test_15_actions_seed_count(conn_url):
+def test_13_actions_seed_count(conn_url):
     with psycopg.connect(conn_url) as conn:
         count = conn.execute('SELECT COUNT(*) FROM reference."actions"').fetchone()[0]
     assert count == 11
 
 
-def test_16_required_action_codes_present(conn_url):
-    required = {
+@pytest.mark.parametrize(
+    "code",
+    [
         "SIGNUP",
         "LOGIN_SUCCESS",
         "LOGIN_FAILED",
@@ -559,13 +855,15 @@ def test_16_required_action_codes_present(conn_url):
         "ACTIVATED",
         "HEARTBEAT_ERROR",
         "DELETED",
-    }
+    ],
+)
+def test_14_action_code_present(conn_url, code):
     with psycopg.connect(conn_url) as conn:
-        codes = {
-            r[0]
-            for r in conn.execute('SELECT code FROM reference."actions"').fetchall()
-        }
-    assert required == codes
+        row = conn.execute(
+            'SELECT 1 FROM reference."actions" WHERE code = %s',
+            (code,),
+        ).fetchone()
+    assert row is not None, f"Action code '{code}' not found in reference.actions"
 
 
 # ===========================================================================
@@ -573,27 +871,27 @@ def test_16_required_action_codes_present(conn_url):
 # ===========================================================================
 
 
-def test_17_vendors_email_lower_unique_index_exists(conn_url):
+@pytest.mark.parametrize(
+    "schema,table,index_name",
+    [
+        ("app", "vendors", "vendors_email_lower_idx"),
+        ("app", "heartbeats", "heartbeats_session_id_idx"),
+        ("audit", "audit_log_vendor_actors", "audit_log_vendor_actors_vendor_id_idx"),
+    ],
+)
+def test_15_index_exists(conn_url, schema, table, index_name):
+    """Verify expected indexes are created on application tables."""
     with psycopg.connect(conn_url) as conn:
         row = conn.execute(
             "SELECT indexname FROM pg_indexes "
-            "WHERE schemaname='app' AND tablename='vendors' "
-            "AND indexname='vendors_email_lower_idx'"
+            "WHERE schemaname=%s AND tablename=%s AND indexname=%s",
+            (schema, table, index_name),
         ).fetchone()
-    assert row is not None, "vendors_email_lower_idx missing"
+    assert row is not None, f"Index {index_name} missing on {schema}.{table}"
 
 
-def test_18_heartbeats_session_id_index_exists(conn_url):
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT indexname FROM pg_indexes "
-            "WHERE schemaname='app' AND tablename='heartbeats' "
-            "AND indexname='heartbeats_session_id_idx'"
-        ).fetchone()
-    assert row is not None
-
-
-def test_19_heartbeats_brin_index_exists_and_is_brin(conn_url):
+def test_16_heartbeats_brin_index_type(conn_url):
+    """Verify heartbeats.heartbeat_at uses BRIN index for time-series data."""
     with psycopg.connect(conn_url) as conn:
         row = conn.execute(
             "SELECT i.relname, am.amname "
@@ -609,22 +907,12 @@ def test_19_heartbeats_brin_index_exists_and_is_brin(conn_url):
     assert row[1] == "brin", f"Expected BRIN, got {row[1]}"
 
 
-def test_20_audit_vendor_actors_index_exists(conn_url):
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT indexname FROM pg_indexes "
-            "WHERE schemaname='audit' AND tablename='audit_log_vendor_actors' "
-            "AND indexname='audit_log_vendor_actors_vendor_id_idx'"
-        ).fetchone()
-    assert row is not None
-
-
 # ===========================================================================
 # 6. CONSTRAINTS
 # ===========================================================================
 
 
-def test_21_licenses_max_grace_secs_blocks_zero(superconn):
+def test_17_licenses_max_grace_secs_blocks_zero(superconn):
     # CHECK: max_grace_secs > 0 rejects zero
     with superconn.transaction():
         vid = insert_vendor(superconn, "grace-zero@example.com")
@@ -632,7 +920,7 @@ def test_21_licenses_max_grace_secs_blocks_zero(superconn):
             insert_license(superconn, vid, grace_secs=0)
 
 
-def test_22_licenses_max_grace_secs_blocks_negative(superconn):
+def test_19_licenses_max_grace_secs_blocks_negative(superconn):
     # CHECK: max_grace_secs > 0 rejects negative
     with superconn.transaction():
         vid = insert_vendor(superconn, "grace-neg@example.com")
@@ -640,7 +928,7 @@ def test_22_licenses_max_grace_secs_blocks_negative(superconn):
             insert_license(superconn, vid, grace_secs=-10)
 
 
-def test_23_node_locked_max_sessions_blocks_zero(superconn):
+def test_20_node_locked_max_sessions_blocks_zero(superconn):
     # CHECK: max_sessions > 0 rejects zero
     with superconn.transaction():
         vid = insert_vendor(superconn, "maxsess-zero@example.com")
@@ -649,7 +937,7 @@ def test_23_node_locked_max_sessions_blocks_zero(superconn):
             insert_node_locked(superconn, lid, "key-zero", max_sessions=0)
 
 
-def test_24_node_locked_max_sessions_blocks_negative(superconn):
+def test_21_node_locked_max_sessions_blocks_negative(superconn):
     # CHECK: max_sessions > 0 rejects negative
     with superconn.transaction():
         vid = insert_vendor(superconn, "maxsess-neg@example.com")
@@ -658,7 +946,7 @@ def test_24_node_locked_max_sessions_blocks_negative(superconn):
             insert_node_locked(superconn, lid, "key-neg", max_sessions=-5)
 
 
-def test_25_heartbeat_error_code_required_when_resp_is_error(superconn):
+def test_22_heartbeat_error_code_required_when_resp_is_error(superconn):
     # CHECK: resp=ERROR with NULL error_code must be rejected
     with superconn.transaction():
         vid = insert_vendor(superconn, "hb-errcode-req@example.com")
@@ -668,7 +956,7 @@ def test_25_heartbeat_error_code_required_when_resp_is_error(superconn):
             insert_heartbeat(superconn, sid, resp_code="ERROR", error_code=None)
 
 
-def test_26_heartbeat_error_code_must_be_null_for_non_error(superconn):
+def test_23_heartbeat_error_code_must_be_null_for_non_error(superconn):
     # CHECK: resp=CONTINUE with a non-NULL error_code must be rejected
     with superconn.transaction():
         vid = insert_vendor(superconn, "hb-errcode-null@example.com")
@@ -680,7 +968,7 @@ def test_26_heartbeat_error_code_must_be_null_for_non_error(superconn):
             )
 
 
-def test_27_heartbeat_error_resp_with_valid_error_code_succeeds(superconn):
+def test_24_heartbeat_error_resp_with_valid_error_code_succeeds(superconn):
     # CHECK: resp=ERROR + valid error_code is accepted
     with superconn.transaction():
         vid = insert_vendor(superconn, "hb-errcode-ok@example.com")
@@ -689,7 +977,7 @@ def test_27_heartbeat_error_resp_with_valid_error_code_succeeds(superconn):
         insert_heartbeat(superconn, sid, resp_code="ERROR", error_code="INTERNAL_ERROR")
 
 
-def test_28_vendors_email_lower_unique_enforced(superconn):
+def test_25_vendors_email_lower_unique_enforced(superconn):
     # UNIQUE: case-insensitive duplicate email must be rejected
     with superconn.transaction():
         insert_vendor(superconn, "UniqueEmail@Example.com")
@@ -697,7 +985,7 @@ def test_28_vendors_email_lower_unique_enforced(superconn):
             insert_vendor(superconn, "uniqueemail@example.com")
 
 
-def test_29_vendors_email_upper_case_duplicate_rejected(superconn):
+def test_26_vendors_email_upper_case_duplicate_rejected(superconn):
     # UNIQUE: all-caps variant also rejected by lower() index
     with superconn.transaction():
         insert_vendor(superconn, "CaseTest@Domain.com")
@@ -705,7 +993,7 @@ def test_29_vendors_email_upper_case_duplicate_rejected(superconn):
             insert_vendor(superconn, "CASETEST@DOMAIN.COM")
 
 
-def test_30_license_key_unique_enforced(superconn):
+def test_27_license_key_unique_enforced(superconn):
     # UNIQUE: duplicate license_key values are rejected
     with superconn.transaction():
         vid = insert_vendor(superconn, "dup-key@example.com")
@@ -848,7 +1136,6 @@ def test_39_vendors_id_defaults_to_uuidv7(superconn):
 
 
 def test_40_heartbeat_routes_to_2026_q1(superconn):
-    # A 2026-Q1 timestamp must land in heartbeats_2026_q1
     with superconn.transaction():
         vid = insert_vendor(superconn, "part-q1@example.com")
         lid = insert_license(superconn, vid)
@@ -862,7 +1149,6 @@ def test_40_heartbeat_routes_to_2026_q1(superconn):
 
 
 def test_41_heartbeat_routes_to_2026_q3(superconn):
-    # A 2026-Q3 timestamp must land in heartbeats_2026_q3
     with superconn.transaction():
         vid = insert_vendor(superconn, "part-q3@example.com")
         lid = insert_license(superconn, vid)
@@ -876,7 +1162,6 @@ def test_41_heartbeat_routes_to_2026_q3(superconn):
 
 
 def test_42_heartbeat_routes_to_default_partition(superconn):
-    # A far-future timestamp must fall into the default partition
     with superconn.transaction():
         vid = insert_vendor(superconn, "part-default@example.com")
         lid = insert_license(superconn, vid)
@@ -895,7 +1180,7 @@ def test_42_heartbeat_routes_to_default_partition(superconn):
 
 
 def test_43_audit_log_update_blocked(superconn):
-    # UPDATE on audit_logs must be blocked by the immutability trigger
+    # Audit logs must never be modified; trigger RAISE to prevent UPDATE
     log_id = _make_audit_log(superconn)
     superconn.commit()
     with pytest.raises(psycopg.errors.RaiseException):
@@ -906,7 +1191,7 @@ def test_43_audit_log_update_blocked(superconn):
 
 
 def test_44_audit_log_delete_blocked(superconn):
-    # DELETE on audit_logs must be blocked by the immutability trigger
+    # Audit logs must never be deleted; trigger RAISE to prevent deletion
     log_id = _make_audit_log(superconn)
     superconn.commit()
     with pytest.raises(psycopg.errors.RaiseException):
@@ -915,7 +1200,7 @@ def test_44_audit_log_delete_blocked(superconn):
 
 
 def test_45_audit_junction_update_blocked(superconn):
-    # UPDATE on audit_log_vendor_actors is also blocked
+    # Junction tables must also be protected from updates
     vid = insert_vendor(superconn, "imm-junction@example.com")
     superconn.commit()
     log_id = _make_audit_log(superconn)
@@ -934,8 +1219,7 @@ def test_45_audit_junction_update_blocked(superconn):
 
 
 def test_46_audit_immutability_fires_for_superuser(superconn):
-    # SECURITY DEFINER: the trigger must fire even when the caller is the
-    # postgres superuser (no SET ROLE in effect).
+    # Audit immutability must be enforced even for the superuser (no bypasses)
     log_id = _make_audit_log(superconn)
     superconn.commit()
     with pytest.raises(psycopg.errors.RaiseException):
@@ -948,21 +1232,32 @@ def test_46_audit_immutability_fires_for_superuser(superconn):
 # ===========================================================================
 
 
-def test_47_app_reader_rls_can_select(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_reader_rls")
-        conn.execute('SELECT COUNT(*) FROM app."vendors"').fetchone()
-        conn.rollback()
+@pytest.mark.parametrize(
+    "role,sql_stmt",
+    [
+        ("app_reader_rls", 'SELECT COUNT(*) FROM app."vendors"'),
+        (
+            "app_writer",
+            "INSERT INTO app.\"vendors\" (email, password_hash) VALUES ('writer-ok@example.com','hash')",
+        ),
+        ("reference_reader", 'SELECT COUNT(*) FROM reference."license_statuses"'),
+        (
+            "audit_writer",
+            "INSERT INTO audit.\"audit_logs\" (action_code) VALUES ('CREATED')",
+        ),
+        ("audit_reader", 'SELECT COUNT(*) FROM audit."audit_logs"'),
+    ],
+)
+def test_47_privilege_grant_simple(conn_url, role, sql_stmt):
+    """Verify roles have expected permissions for basic operations."""
+    # Validate role against whitelist to prevent SQL injection via role name
+    if role not in ALL_GROUP_ROLES:
+        raise ValueError(f"Invalid role: {role}")
 
-
-def test_48_app_writer_can_insert(conn_url):
     with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_writer")
-        conn.execute(
-            'INSERT INTO app."vendors" (email, password_hash) '
-            "VALUES ('writer-ok@example.com','hash')"
-        )
-        conn.commit()
+        conn.execute(f"SET LOCAL ROLE {role}")
+        conn.execute(sql_stmt)
+        conn.commit()  # Verify operation succeeds without exception
 
 
 def test_49_app_writer_can_update(conn_url):
@@ -993,147 +1288,53 @@ def test_50_app_deleter_can_delete(conn_url):
         conn.commit()
 
 
-def test_51_reference_reader_can_select(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE reference_reader")
-        count = conn.execute(
-            'SELECT COUNT(*) FROM reference."license_statuses"'
-        ).fetchone()[0]
-        conn.rollback()
-    assert count == 2
-
-
-def test_52_audit_writer_can_insert(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE audit_writer")
-        conn.execute(
-            "INSERT INTO audit.\"audit_logs\" (action_code) VALUES ('CREATED')"
-        )
-        conn.commit()
-
-
-def test_53_audit_reader_can_select(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE audit_reader")
-        conn.execute('SELECT COUNT(*) FROM audit."audit_logs"').fetchone()
-        conn.rollback()
-
-
 # ===========================================================================
 # 12. PRIVILEGE FAILURE PATHS
 # ===========================================================================
 
 
-def test_54_app_reader_rls_cannot_insert(conn_url):
+@pytest.mark.parametrize(
+    "role,sql_stmt",
+    [
+        (
+            "app_reader_rls",
+            "INSERT INTO app.\"vendors\" (email, password_hash) VALUES ('reader-fail@example.com','hash')",
+        ),
+        ("app_reader_rls", 'UPDATE app."vendors" SET updated_at=NOW()'),
+        ("app_reader_rls", 'DELETE FROM app."vendors"'),
+        ("app_writer", 'DELETE FROM app."vendors"'),
+        (
+            "app_deleter",
+            "INSERT INTO app.\"vendors\" (email, password_hash) VALUES ('deleter-insert-fail@example.com','hash')",
+        ),
+        ("app_deleter", 'UPDATE app."vendors" SET updated_at=NOW()'),
+        (
+            "reference_reader",
+            "INSERT INTO reference.\"license_statuses\" (code, description) VALUES ('FAKE','should fail')",
+        ),
+        (
+            "reference_writer",
+            "UPDATE reference.\"license_statuses\" SET description='hacked' WHERE code='ACTIVE'",
+        ),
+        ("reference_writer", 'DELETE FROM reference."license_statuses"'),
+        ("audit_writer", 'SELECT COUNT(*) FROM audit."audit_logs"'),
+        (
+            "audit_reader",
+            "INSERT INTO audit.\"audit_logs\" (action_code) VALUES ('CREATED')",
+        ),
+        ("app_reader_rls", 'SELECT * FROM reference."license_statuses"'),
+    ],
+)
+def test_51_privilege_denial(conn_url, role, sql_stmt):
+    """Verify roles cannot perform unauthorized operations."""
+    # Validate role against whitelist to prevent SQL injection via role name
+    if role not in ALL_GROUP_ROLES:
+        raise ValueError(f"Invalid role: {role}")
+
     with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_reader_rls")
+        conn.execute(f"SET LOCAL ROLE {role}")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute(
-                'INSERT INTO app."vendors" (email, password_hash) '
-                "VALUES ('reader-fail@example.com','hash')"
-            )
-        conn.rollback()
-
-
-def test_55_app_reader_rls_cannot_update(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_reader_rls")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute('UPDATE app."vendors" SET updated_at=NOW()')
-        conn.rollback()
-
-
-def test_56_app_reader_rls_cannot_delete(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_reader_rls")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute('DELETE FROM app."vendors"')
-        conn.rollback()
-
-
-def test_57_app_writer_cannot_delete(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_writer")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute('DELETE FROM app."vendors"')
-        conn.rollback()
-
-
-def test_58_app_deleter_cannot_insert(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_deleter")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute(
-                'INSERT INTO app."vendors" (email, password_hash) '
-                "VALUES ('deleter-insert-fail@example.com','hash')"
-            )
-        conn.rollback()
-
-
-def test_59_app_deleter_cannot_update(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_deleter")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute('UPDATE app."vendors" SET updated_at=NOW()')
-        conn.rollback()
-
-
-def test_60_reference_reader_cannot_insert(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE reference_reader")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute(
-                'INSERT INTO reference."license_statuses" (code, description) '
-                "VALUES ('FAKE','should fail')"
-            )
-        conn.rollback()
-
-
-def test_61_reference_writer_cannot_update(conn_url):
-    # reference_writer has INSERT only, not UPDATE
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE reference_writer")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute(
-                'UPDATE reference."license_statuses" '
-                "SET description='hacked' WHERE code='ACTIVE'"
-            )
-        conn.rollback()
-
-
-def test_62_reference_writer_cannot_delete(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE reference_writer")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute('DELETE FROM reference."license_statuses"')
-        conn.rollback()
-
-
-def test_63_audit_writer_cannot_select(conn_url):
-    # audit_writer has INSERT only, not SELECT
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE audit_writer")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute('SELECT COUNT(*) FROM audit."audit_logs"')
-        conn.rollback()
-
-
-def test_64_audit_reader_cannot_insert(conn_url):
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE audit_reader")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute(
-                "INSERT INTO audit.\"audit_logs\" (action_code) VALUES ('CREATED')"
-            )
-        conn.rollback()
-
-
-def test_65_app_reader_rls_cannot_access_reference_schema(conn_url):
-    # app_reader_rls has no USAGE on reference schema, so name resolution fails
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        conn.execute("SET LOCAL ROLE app_reader_rls")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            conn.execute('SELECT * FROM reference."license_statuses"')
+            conn.execute(sql_stmt)
         conn.rollback()
 
 
@@ -1142,8 +1343,7 @@ def test_65_app_reader_rls_cannot_access_reference_schema(conn_url):
 # ===========================================================================
 
 
-def test_66_public_role_has_no_create_on_public_schema(conn_url):
-    # 01_roles.sql revokes CREATE on public from PUBLIC; verify it is absent
+def test_52_public_role_has_no_create_on_public_schema(conn_url):
     with psycopg.connect(conn_url) as conn:
         acl = conn.execute(
             "SELECT nspacl FROM pg_namespace WHERE nspname='public'"
@@ -1157,7 +1357,7 @@ def test_66_public_role_has_no_create_on_public_schema(conn_url):
 # ===========================================================================
 
 
-def test_67_down_migrations_remove_schemas(fresh_db):
+def test_53_down_migrations_remove_schemas(fresh_db):
     for f in DOWN_MIGRATIONS:
         apply_sql_file(fresh_db, MIGRATIONS_DIR / f)
     url = fresh_db.get_connection_url(driver=None)
@@ -1169,19 +1369,19 @@ def test_67_down_migrations_remove_schemas(fresh_db):
     assert len(schemas) == 0
 
 
-def test_68_down_migrations_remove_all_roles(fresh_db):
+def test_54_down_migrations_remove_all_roles(fresh_db):
     for f in DOWN_MIGRATIONS:
         apply_sql_file(fresh_db, MIGRATIONS_DIR / f)
     url = fresh_db.get_connection_url(driver=None)
     with psycopg.connect(url) as conn:
         roles = conn.execute(
-            f"SELECT rolname FROM pg_roles "
-            f"WHERE rolname IN ({','.join(repr(r) for r in ALL_GROUP_ROLES)})"
+            "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
+            (ALL_GROUP_ROLES,),
         ).fetchall()
     assert len(roles) == 0
 
 
-def test_69_down_migrations_remove_trigger_function(fresh_db):
+def test_55_down_migrations_remove_trigger_function(fresh_db):
     for f in DOWN_MIGRATIONS:
         apply_sql_file(fresh_db, MIGRATIONS_DIR / f)
     url = fresh_db.get_connection_url(driver=None)
@@ -1194,8 +1394,7 @@ def test_69_down_migrations_remove_trigger_function(fresh_db):
     assert row is None
 
 
-def test_70_down_migrations_restore_public_schema_privileges(fresh_db):
-    # 01_roles_down.sql must restore CREATE and USAGE on public for PUBLIC
+def test_56_down_migrations_restore_public_schema_privileges(fresh_db):
     for f in DOWN_MIGRATIONS:
         apply_sql_file(fresh_db, MIGRATIONS_DIR / f)
     url = fresh_db.get_connection_url(driver=None)
@@ -1214,16 +1413,14 @@ def test_70_down_migrations_restore_public_schema_privileges(fresh_db):
     assert usage_ok is True, "PUBLIC USAGE on public schema not restored"
 
 
-def test_71_down_migrations_are_idempotent(fresh_db):
-    # Running all down migrations twice must not raise any error
+def test_57_down_migrations_are_idempotent(fresh_db):
     for f in DOWN_MIGRATIONS:
         apply_sql_file(fresh_db, MIGRATIONS_DIR / f)
     for f in DOWN_MIGRATIONS:
         apply_sql_file(fresh_db, MIGRATIONS_DIR / f)
 
 
-def test_72_up_after_down_restores_full_state(fresh_db):
-    # down then up must produce a snapshot identical to a freshly migrated DB
+def test_58_up_after_down_restores_full_state(fresh_db):
     with PostgresContainer(POSTGRES_IMAGE, driver=None).with_volume_mapping(
         str(MIGRATIONS_DIR), "/docker-entrypoint-initdb.d", mode="ro"
     ) as reference_container:
@@ -1240,5 +1437,354 @@ def test_72_up_after_down_restores_full_state(fresh_db):
     )
 
 
+# ===========================================================================
+# 15. RLS — STRUCTURE
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "table",
+    ["licenses", "node_locked_license_data", "sessions", "heartbeats"],
+)
+def test_59_rls_enabled_on_tenant_table(conn_url, table):
+    with psycopg.connect(conn_url) as conn:
+        row = conn.execute(
+            "SELECT relrowsecurity FROM pg_class WHERE relname = %s "
+            "AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname='app')",
+            (table,),
+        ).fetchone()
+    assert row is not None, f"Table app.{table} not found"
+    assert row[0] is True, f"RLS not enabled on app.{table}"
+
+
+@pytest.mark.parametrize(
+    "table,policy",
+    [
+        ("licenses", "licenses_select_own"),
+        ("licenses", "licenses_insert_own"),
+        ("licenses", "licenses_update_own"),
+        ("licenses", "licenses_delete_own"),
+        ("node_locked_license_data", "node_locked_select_own"),
+        ("node_locked_license_data", "node_locked_insert_own"),
+        ("node_locked_license_data", "node_locked_update_own"),
+        ("node_locked_license_data", "node_locked_delete_own"),
+        ("sessions", "sessions_select_own"),
+        ("sessions", "sessions_insert_own"),
+        ("sessions", "sessions_update_own"),
+        ("sessions", "sessions_delete_own"),
+        ("heartbeats", "heartbeats_select_own"),
+        ("heartbeats", "heartbeats_insert_own"),
+        ("heartbeats", "heartbeats_update_own"),
+        ("heartbeats", "heartbeats_delete_own"),
+    ],
+)
+def test_60_rls_policy_exists(conn_url, table, policy):
+    with psycopg.connect(conn_url) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM pg_policies "
+            "WHERE tablename = %s AND policyname = %s AND schemaname = 'app'",
+            (table, policy),
+        ).fetchone()
+    assert row is not None, f"Policy '{policy}' not found on table app.{table}"
+
+
+def test_61_set_app_context_function_exists(conn_url):
+    with psycopg.connect(conn_url) as conn:
+        result = conn.execute(
+            "SELECT 1 FROM pg_proc p "
+            "JOIN pg_namespace n ON p.pronamespace = n.oid "
+            "WHERE n.nspname = 'app' AND p.proname = 'set_app_context'"
+        ).fetchone()
+        assert result is not None, "app.set_app_context function not found"
+
+
+def test_61b_set_app_context_not_executable_by_public(conn_url):
+    """PUBLIC must not be able to call set_app_context."""
+    with psycopg.connect(conn_url) as conn:
+        grants = [
+            r[0]
+            for r in conn.execute(
+                "SELECT grantee FROM information_schema.routine_privileges "
+                "WHERE routine_schema='app' AND routine_name='set_app_context' "
+                "ORDER BY grantee"
+            ).fetchall()
+        ]
+    assert "PUBLIC" not in grants, "PUBLIC should not have EXECUTE on set_app_context"
+
+
+# ===========================================================================
+# 16. RLS — VENDOR ISOLATION
+# ===========================================================================
+
+
+def test_62_vendor_isolation_select(superconn):
+    vendor_a_id = insert_vendor(superconn, "vendor_a_76@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_76@example.com")
+    license_a_id = insert_license(superconn, vendor_a_id)
+    license_b_id = insert_license(superconn, vendor_b_id)
+
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_reader_rls")
+        superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+
+        count = superconn.execute('SELECT COUNT(*) FROM app."licenses"').fetchone()[0]
+        assert count == 1, f"Vendor A expected 1 license, got {count}"
+
+        own = superconn.execute(
+            'SELECT vendor_id FROM app."licenses" WHERE id = %s', (license_a_id,)
+        ).fetchone()
+        assert own is not None and own[0] == vendor_a_id
+
+        cross = superconn.execute(
+            'SELECT COUNT(*) FROM app."licenses" WHERE id = %s', (license_b_id,)
+        ).fetchone()[0]
+        assert cross == 0, "Vendor A must not see Vendor B's license"
+
+        # Flip context to vendor_b
+        superconn.execute("SELECT app.set_app_context(%s)", (vendor_b_id,))
+        count = superconn.execute('SELECT COUNT(*) FROM app."licenses"').fetchone()[0]
+        assert count == 1, f"Vendor B expected 1 license, got {count}"
+
+
+def test_63_vendor_isolation_insert(superconn):
+    vendor_a_id = insert_vendor(superconn, "vendor_a_77@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_77@example.com")
+
+    superconn.execute("SET LOCAL ROLE app_writer")
+    superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+
+    # Own insert succeeds
+    superconn.execute(
+        'INSERT INTO app."licenses" ("vendor_id","license_status_code","max_grace_secs") '
+        "VALUES (%s,'ACTIVE',60)",
+        (vendor_a_id,),
+    )
+
+    # Cross-vendor insert rejected by WITH CHECK
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        superconn.execute(
+            'INSERT INTO app."licenses" ("vendor_id","license_status_code","max_grace_secs") '
+            "VALUES (%s,'ACTIVE',60)",
+            (vendor_b_id,),
+        )
+
+    superconn.rollback()
+
+
+def test_64_vendor_isolation_update(superconn):
+    vendor_a_id = insert_vendor(superconn, "vendor_a_78@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_78@example.com")
+    license_a_id = insert_license(superconn, vendor_a_id)
+    license_b_id = insert_license(superconn, vendor_b_id)
+
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_writer")
+        superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+
+        # Own update succeeds
+        superconn.execute(
+            'UPDATE app."licenses" SET updated_at=NOW() WHERE id=%s', (license_a_id,)
+        )
+
+        # Cross-vendor update silently affects 0 rows (USING hides it)
+        cur = superconn.execute(
+            'UPDATE app."licenses" SET updated_at=NOW() WHERE id=%s', (license_b_id,)
+        )
+        assert cur.rowcount == 0, "Vendor A must not update Vendor B's license"
+
+
+def test_65_vendor_isolation_delete(superconn):
+    vendor_a_id = insert_vendor(superconn, "vendor_a_79@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_79@example.com")
+    license_a_id = insert_license(superconn, vendor_a_id)
+    license_b_id = insert_license(superconn, vendor_b_id)
+
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_deleter")
+        superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+
+        # Own delete succeeds
+        cur = superconn.execute(
+            'DELETE FROM app."licenses" WHERE id=%s', (license_a_id,)
+        )
+        assert cur.rowcount == 1, "Own license should be deleted"
+
+        # Cross-vendor delete silently affects 0 rows
+        cur = superconn.execute(
+            'DELETE FROM app."licenses" WHERE id=%s', (license_b_id,)
+        )
+        assert cur.rowcount == 0, "Vendor A must not delete Vendor B's license"
+
+        # Confirm license_b is untouched (verify as app_owner to bypass RLS)
+        superconn.execute("SET LOCAL ROLE app_owner")
+        remaining = superconn.execute(
+            'SELECT COUNT(*) FROM app."licenses" WHERE id=%s', (license_b_id,)
+        ).fetchone()[0]
+        assert remaining == 1, "Vendor B's license was wrongly deleted"
+
+
+def test_66_queries_without_context_return_zero_rows(superconn):
+    vid = insert_vendor(superconn, "vendor_80@example.com")
+    insert_license(superconn, vid)
+
+    # Switch role but intentionally do NOT call set_app_context
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_reader_rls")
+
+        count = superconn.execute('SELECT COUNT(*) FROM app."licenses"').fetchone()[0]
+        assert count == 0, f"Expected 0 rows without context, got {count}"
+
+
+def test_67_sessions_isolation(superconn):
+    vendor_a_id = insert_vendor(superconn, "vendor_a_81@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_81@example.com")
+    license_a_id = insert_license(superconn, vendor_a_id)
+    license_b_id = insert_license(superconn, vendor_b_id)
+    session_a_id = insert_session(superconn, license_a_id, fingerprint="fp_a")
+    session_b_id = insert_session(superconn, license_b_id, fingerprint="fp_b")
+
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_reader_rls")
+        superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+
+        count = superconn.execute('SELECT COUNT(*) FROM app."sessions"').fetchone()[0]
+        assert count == 1, f"Vendor A expected 1 session, got {count}"
+
+        cross = superconn.execute(
+            'SELECT COUNT(*) FROM app."sessions" WHERE id=%s', (session_b_id,)
+        ).fetchone()[0]
+        assert cross == 0, "Vendor A must not see Vendor B's session"
+
+
+def test_68_node_locked_isolation(superconn):
+    vendor_a_id = insert_vendor(superconn, "vendor_a_82@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_82@example.com")
+    license_a_id = insert_license(superconn, vendor_a_id)
+    license_b_id = insert_license(superconn, vendor_b_id)
+    insert_node_locked(superconn, license_a_id, "key_a_82")
+    insert_node_locked(superconn, license_b_id, "key_b_82")
+
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_reader_rls")
+        superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+
+        count = superconn.execute(
+            'SELECT COUNT(*) FROM app."node_locked_license_data"'
+        ).fetchone()[0]
+        assert count == 1, f"Vendor A expected 1 node-locked record, got {count}"
+
+        cross = superconn.execute(
+            'SELECT COUNT(*) FROM app."node_locked_license_data" WHERE license_id=%s',
+            (license_b_id,),
+        ).fetchone()[0]
+        assert cross == 0, "Vendor A must not see Vendor B's node-locked data"
+
+
+def test_69_heartbeats_isolation(superconn):
+    vendor_a_id = insert_vendor(superconn, "vendor_a_83@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_83@example.com")
+    license_a_id = insert_license(superconn, vendor_a_id)
+    license_b_id = insert_license(superconn, vendor_b_id)
+    session_a_id = insert_session(superconn, license_a_id)
+    session_b_id = insert_session(superconn, license_b_id)
+    insert_heartbeat(superconn, session_a_id)
+    insert_heartbeat(superconn, session_b_id)
+
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_reader_rls")
+        superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+
+        count = superconn.execute('SELECT COUNT(*) FROM app."heartbeats"').fetchone()[0]
+        assert count == 1, f"Vendor A expected 1 heartbeat, got {count}"
+
+        cross = superconn.execute(
+            'SELECT COUNT(*) FROM app."heartbeats" WHERE session_id=%s', (session_b_id,)
+        ).fetchone()[0]
+        assert cross == 0, "Vendor A must not see Vendor B's heartbeats"
+
+
+def test_70_connection_context_isolation(conn_url):
+    with psycopg.connect(conn_url) as conn1, psycopg.connect(conn_url) as conn2:
+        vendor_a_id = insert_vendor(conn1, "vendor_a_84@example.com")
+        vendor_b_id = insert_vendor(conn1, "vendor_b_84@example.com")
+        insert_license(conn1, vendor_a_id)
+        insert_license(conn1, vendor_b_id)
+        conn1.commit()
+
+        with conn1.transaction():
+            conn1.execute("SET LOCAL ROLE app_reader_rls")
+            conn1.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+            assert (
+                conn1.execute('SELECT COUNT(*) FROM app."licenses"').fetchone()[0] == 1
+            )
+
+        with conn2.transaction():
+            conn2.execute("SET LOCAL ROLE app_reader_rls")
+            conn2.execute("SELECT app.set_app_context(%s)", (vendor_b_id,))
+            assert (
+                conn2.execute('SELECT COUNT(*) FROM app."licenses"').fetchone()[0] == 1
+            )
+
+        # Re-check conn1 to confirm context didn't bleed from conn2
+        with conn1.transaction():
+            conn1.execute("SET LOCAL ROLE app_reader_rls")
+            conn1.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+            assert (
+                conn1.execute('SELECT COUNT(*) FROM app."licenses"').fetchone()[0] == 1
+            )
+
+
+def test_71_rls_bypass_for_app_reader_bypass(superconn):
+    vendor_a_id = insert_vendor(superconn, "vendor_a_85@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_85@example.com")
+    license_a_id = insert_license(superconn, vendor_a_id)
+    license_b_id = insert_license(superconn, vendor_b_id)
+
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_reader_bypass")
+
+        count = superconn.execute(
+            'SELECT COUNT(*) FROM app."licenses" WHERE id IN (%s,%s)',
+            (license_a_id, license_b_id),
+        ).fetchone()[0]
+        assert count == 2, f"app_reader_bypass should see both licenses, got {count}"
+
+
+def test_72_rls_blocks_vendor_id_hijack_via_update(superconn):
+    """Vendor A cannot UPDATE vendor_id to re-assign their license to Vendor B's namespace."""
+    vendor_a_id = insert_vendor(superconn, "vendor_a_86@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_86@example.com")
+    license_a_id = insert_license(superconn, vendor_a_id)
+
+    superconn.execute("SET LOCAL ROLE app_writer")
+    superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
+
+    # Attempting to change vendor_id to vendor_b on an own row must fail the
+    # WITH CHECK clause (new vendor_id != context vendor_id).
+    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+        superconn.execute(
+            'UPDATE app."licenses" SET vendor_id=%s WHERE id=%s',
+            (vendor_b_id, license_a_id),
+        )
+
+    superconn.rollback()
+
+
+def test_73_rls_no_leakage_via_app_owner_role_switch(superconn):
+    """app_owner bypasses RLS by design and must see all vendors' rows."""
+    vendor_a_id = insert_vendor(superconn, "vendor_a_87@example.com")
+    vendor_b_id = insert_vendor(superconn, "vendor_b_87@example.com")
+    lic_a = insert_license(superconn, vendor_a_id)
+    lic_b = insert_license(superconn, vendor_b_id)
+
+    with superconn.transaction():
+        superconn.execute("SET LOCAL ROLE app_owner")
+        count = superconn.execute(
+            'SELECT COUNT(*) FROM app."licenses" WHERE id IN (%s,%s)',
+            (lic_a, lic_b),
+        ).fetchone()[0]
+        assert count == 2, "app_owner should see both licenses (RLS bypass)"
+
+
 if __name__ == "__main__":
-    pytest.main([__file__, "-n", "auto", "-v", "--tb=short"])
+    pytest.main([__file__, "-v", "--tb=short"] + sys.argv[1:])
