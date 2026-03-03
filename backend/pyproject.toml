@@ -18,9 +18,11 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest<8.0.0,>=7.4.3",
+    "testcontainers[postgres]>=4.0.0",
     "ruff<1.0.0,>=0.2.2",
     "prek>=0.2.24,<1.0.0",
     "coverage<8.0.0,>=7.4.3",
+    "pytest-xdist>=3.5.0,<4.0.0",
 ]
 
 [build-system]
@@ -29,3 +31,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: Pure unit tests (no external dependencies)",
+    "integration: Integration tests (require database / containers)",
+]
