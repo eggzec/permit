@@ -81,4 +81,10 @@ DROP ROLE IF EXISTS reference_writer;
 DROP ROLE IF EXISTS reference_reader;
 DROP ROLE IF EXISTS reference_owner;
 
+-- Restore the default PUBLIC schema privileges that were revoked
+-- in 01_roles.sql. PostgreSQL grants these by default; a rollback
+-- must put them back so the environment is returned to its prior state.
+GRANT CREATE ON SCHEMA public TO PUBLIC;
+GRANT USAGE  ON SCHEMA public TO PUBLIC;
+
 COMMIT;

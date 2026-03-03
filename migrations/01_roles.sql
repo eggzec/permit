@@ -118,18 +118,21 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role reference_owner already exists, skipping';
 END $$;
+ALTER ROLE reference_owner NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
     CREATE ROLE reference_reader NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role reference_reader already exists, skipping';
 END $$;
+ALTER ROLE reference_reader NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
     CREATE ROLE reference_writer NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role reference_writer already exists, skipping';
 END $$;
+ALTER ROLE reference_writer NOLOGIN NOINHERIT NOBYPASSRLS;
 
 
 -- ============================================================
@@ -146,18 +149,21 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role audit_owner already exists, skipping';
 END $$;
+ALTER ROLE audit_owner NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
     CREATE ROLE audit_writer NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role audit_writer already exists, skipping';
 END $$;
+ALTER ROLE audit_writer NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
     CREATE ROLE audit_reader NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role audit_reader already exists, skipping';
 END $$;
+ALTER ROLE audit_reader NOLOGIN NOINHERIT NOBYPASSRLS;
 
 
 -- ============================================================
@@ -185,12 +191,14 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_owner already exists, skipping';
 END $$;
+ALTER ROLE app_owner NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
     CREATE ROLE app_reader_rls NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_reader_rls already exists, skipping';
 END $$;
+ALTER ROLE app_reader_rls NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
     -- BYPASSRLS is a role attribute, not a grantable privilege.
@@ -202,19 +210,21 @@ EXCEPTION WHEN duplicate_object THEN
 END $$;
 -- Idempotent: safe to re-run regardless of whether the role
 -- was just created or already existed.
-ALTER ROLE app_reader_bypass BYPASSRLS;
+ALTER ROLE app_reader_bypass NOLOGIN NOINHERIT BYPASSRLS;
 
 DO $$ BEGIN
     CREATE ROLE app_writer NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_writer already exists, skipping';
 END $$;
+ALTER ROLE app_writer NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
     CREATE ROLE app_deleter NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_deleter already exists, skipping';
 END $$;
+ALTER ROLE app_deleter NOLOGIN NOINHERIT NOBYPASSRLS;
 
 
 -- ============================================================
@@ -252,6 +262,17 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA reference FROM PUBLIC;
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA app       FROM PUBLIC;
 REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA audit     FROM PUBLIC;
 
+-- Strip the PUBLIC EXECUTE default for functions created IN THE FUTURE
+-- by each owner role. Without these, any new function deployed by an
+-- owner role would inherit the PostgreSQL default and be executable
+-- by PUBLIC until an explicit REVOKE is issued.
+ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE audit_owner
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner
+    REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
 
 -- ============================================================
 -- SCHEMA USAGE GRANTS
@@ -262,9 +283,11 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA audit     FROM PUBLIC;
 -- ============================================================
 
 GRANT USAGE ON SCHEMA reference TO reference_reader, reference_writer;
+GRANT USAGE ON SCHEMA reference TO app_owner, audit_owner;
 GRANT USAGE ON SCHEMA audit     TO audit_writer, audit_reader;
 GRANT USAGE ON SCHEMA app       TO app_reader_rls, app_reader_bypass,
                                    app_writer, app_deleter;
+GRANT USAGE ON SCHEMA app       TO audit_owner;
 
 
 -- ============================================================
@@ -280,11 +303,13 @@ GRANT USAGE ON SCHEMA app       TO app_reader_rls, app_reader_bypass,
 ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
     GRANT SELECT              ON TABLES    TO reference_reader;
 ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
-    GRANT INSERT, UPDATE      ON TABLES    TO reference_writer;
+    GRANT INSERT              ON TABLES    TO reference_writer;
 ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
     GRANT USAGE, SELECT       ON SEQUENCES TO reference_writer;
 ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
     GRANT EXECUTE             ON FUNCTIONS TO reference_reader, reference_writer;
+ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
+    GRANT REFERENCES          ON TABLES    TO app_owner, audit_owner;
 
 -- --- audit schema ---
 ALTER DEFAULT PRIVILEGES FOR ROLE audit_owner IN SCHEMA audit
@@ -310,6 +335,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
 ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
     GRANT EXECUTE                     ON FUNCTIONS TO app_reader_rls, app_reader_bypass,
                                                       app_writer, app_deleter;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
+    GRANT REFERENCES                  ON TABLES    TO audit_owner;
 
 
 -- ============================================================
@@ -322,9 +349,10 @@ ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
 
 -- --- reference ---
 GRANT SELECT                  ON ALL TABLES    IN SCHEMA reference TO reference_reader;
-GRANT INSERT, UPDATE          ON ALL TABLES    IN SCHEMA reference TO reference_writer;
+GRANT INSERT                  ON ALL TABLES    IN SCHEMA reference TO reference_writer;
 GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA reference TO reference_writer;
 GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA reference TO reference_reader, reference_writer;
+GRANT REFERENCES              ON ALL TABLES    IN SCHEMA reference TO app_owner, audit_owner;
 
 -- --- audit ---
 GRANT INSERT                  ON ALL TABLES    IN SCHEMA audit TO audit_writer;
@@ -340,6 +368,7 @@ GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA app TO app_writer;
 GRANT SELECT                  ON ALL SEQUENCES IN SCHEMA app TO app_reader_rls, app_reader_bypass;
 GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA app TO app_reader_rls, app_reader_bypass,
                                                                 app_writer, app_deleter;
+GRANT REFERENCES              ON ALL TABLES    IN SCHEMA app TO audit_owner;
 
 
 -- ============================================================

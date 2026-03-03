@@ -89,7 +89,7 @@ SET LOCAL ROLE app_owner;
 DO $$ BEGIN
     CREATE TABLE app."vendors" (
         "id"              UUID        PRIMARY KEY DEFAULT uuidv7(),
-        "email"           TEXT        NOT NULL UNIQUE,
+        "email"           TEXT        NOT NULL,
         "password_hash"   TEXT        NOT NULL,
         "created_at"      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         "updated_at"      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -97,6 +97,15 @@ DO $$ BEGIN
     );
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table app."vendors" already exists, skipping';
+END $$;
+
+-- Case-insensitive uniqueness on email via a functional unique index.
+-- Replaces the column-level UNIQUE constraint.
+DO $$ BEGIN
+    CREATE UNIQUE INDEX "vendors_email_lower_idx"
+        ON app."vendors" (LOWER("email"));
+EXCEPTION WHEN duplicate_table THEN
+    RAISE NOTICE 'index "vendors_email_lower_idx" already exists, skipping';
 END $$;
 
 -- COMMENT ON is idempotent and intentionally outside the DO block.
@@ -259,7 +268,7 @@ COMMENT ON COLUMN app."sessions"."metadata"                IS 'Arbitrary metadat
 
 DO $$ BEGIN
     CREATE TABLE app."heartbeats" (
-        "id"                         UUID        NOT NULL UNIQUE DEFAULT uuidv7(),
+        "id"                         UUID        NOT NULL DEFAULT uuidv7(),
         "session_id"                 UUID        NOT NULL
                                                  REFERENCES app."sessions"("id")
                                                  ON DELETE CASCADE,
@@ -369,14 +378,14 @@ END $$;
 DO $$ BEGIN
     CREATE INDEX "heartbeats_session_id_idx"
         ON app."heartbeats" ("session_id");
-EXCEPTION WHEN duplicate_object THEN
+EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "heartbeats_session_id_idx" already exists, skipping';
 END $$;
 
 DO $$ BEGIN
     CREATE INDEX "heartbeats_heartbeat_at_idx"
         ON app."heartbeats" USING BRIN ("heartbeat_at");
-EXCEPTION WHEN duplicate_object THEN
+EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "heartbeats_heartbeat_at_idx" already exists, skipping';
 END $$;
 
