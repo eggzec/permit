@@ -17,7 +17,7 @@
 --   • CREATE TABLE          : wrapped in DO $$ … EXCEPTION WHEN
 --                             duplicate_table THEN RAISE NOTICE
 --   • CREATE INDEX          : wrapped in DO $$ … EXCEPTION WHEN
---                             duplicate_object THEN RAISE NOTICE
+--                             duplicate_table THEN RAISE NOTICE
 --   • CREATE OR REPLACE
 --     FUNCTION              : idempotent by definition
 --   • CREATE OR REPLACE
@@ -149,7 +149,7 @@ COMMENT ON COLUMN audit."audit_log_vendor_actors"."vendor_id"    IS 'Vendor who 
 DO $$ BEGIN
     CREATE INDEX "audit_log_vendor_actors_vendor_id_idx"
         ON audit."audit_log_vendor_actors" ("vendor_id");
-EXCEPTION WHEN duplicate_object THEN
+EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "audit_log_vendor_actors_vendor_id_idx" already exists, skipping';
 END $$;
 
@@ -183,7 +183,7 @@ COMMENT ON COLUMN audit."audit_log_licenses"."changes"      IS 'Optional JSONB d
 DO $$ BEGIN
     CREATE INDEX "audit_log_licenses_license_id_idx"
         ON audit."audit_log_licenses" ("license_id");
-EXCEPTION WHEN duplicate_object THEN
+EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "audit_log_licenses_license_id_idx" already exists, skipping';
 END $$;
 
@@ -216,7 +216,7 @@ COMMENT ON COLUMN audit."audit_log_sessions"."changes"      IS 'Optional JSONB d
 DO $$ BEGIN
     CREATE INDEX "audit_log_sessions_session_id_idx"
         ON audit."audit_log_sessions" ("session_id");
-EXCEPTION WHEN duplicate_object THEN
+EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "audit_log_sessions_session_id_idx" already exists, skipping';
 END $$;
 

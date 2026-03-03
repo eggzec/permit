@@ -16,7 +16,7 @@
 --   • CREATE TABLE / partitions : wrapped in DO $$ … EXCEPTION
 --     WHEN duplicate_table THEN RAISE NOTICE
 --   • CREATE INDEX : wrapped in DO $$ … EXCEPTION WHEN
---     duplicate_object THEN RAISE NOTICE
+--     duplicate_table THEN RAISE NOTICE
 --   • COMMENT ON   : outside DO blocks intentionally — COMMENT ON
 --     is idempotent (replaces the existing comment) and requires
 --     no guard.
