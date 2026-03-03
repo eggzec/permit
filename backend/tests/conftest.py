@@ -2,158 +2,82 @@
 Root conftest - shared fixtures for unit and integration tests.
 
 Key fixtures:
-    postgres_container: Session-scoped Testcontainers PostgreSQL instance.
-    app: FastAPI application wired to the test database.
-    client: httpx.AsyncClient bound to the app.
+    override_get_db: Module-scoped override of the get_db dependency.
+        Starts a dedicated Testcontainers Postgres per module with
+        migrations auto-applied via volume mapping.
     db_session: Per-test psycopg cursor inside a transaction that is
         rolled back after each test (full isolation).
 """
 
 from __future__ import annotations
 
-import typing
-from psycopg import Cursor
-
-import logging
 import os
-from collections.abc import Generator
+import pathlib
+import typing
 
-
-import psycopg
 import pytest
-from dotenv import load_dotenv
-from fastapi.testclient import TestClient
-
-
+from psycopg import Cursor, connect
 from testcontainers.postgres import PostgresContainer
-from psycopg import connect
 
-# Load .env before importing app.main to ensure env vars are set
-dotenv_path = os.path.join(os.path.dirname(__file__), "..", ".env")
-load_dotenv(dotenv_path)
+# Set required env vars before importing app so Settings() can instantiate.
+# These are dummy values — the real DB connection comes from Testcontainers
+# via the get_db dependency override.
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("PROJECT_NAME", "permit-test")
+os.environ.setdefault("POSTGRES_SERVER", "localhost")
+os.environ.setdefault("POSTGRES_PORT", "5432")
+os.environ.setdefault("POSTGRES_USER", "test")
+os.environ.setdefault("POSTGRES_PASSWORD", "test")
+os.environ.setdefault("POSTGRES_DB", "test")
 
-# noqa: E402 to allow imports after env setup
 from app.main import app  # noqa: E402
 from app.api.deps import get_db  # noqa: E402
 
-logger = logging.getLogger(__name__)
-
-
-def _make_dsn(container: PostgresContainer) -> str:
-    dsn = container.get_connection_url()
-    # Patch SQLAlchemy/Testcontainers DSN to psycopg3-compatible
-    if dsn.startswith("postgresql+psycopg2://"):
-        dsn = dsn.replace("postgresql+psycopg2://", "postgresql://", 1)
-    return dsn
+MIGRATIONS_DIR = str(
+    pathlib.Path(__file__).resolve().parent.parent.parent / "migrations"
+)
 
 
 # ---------------------------------------------------------------------------
-# 1. Testcontainers - session-scoped Postgres
+# 1. Override get_db dependency (module-scoped, each module gets its own container)
 # ---------------------------------------------------------------------------
-@pytest.fixture(scope="session")
-def postgres_container() -> Generator[PostgresContainer, None, None]:
-    """Start a PostgreSQL container once for the entire test session.
-
-    The container is stopped automatically when the session ends.
-
-    Yields:
-        A running PostgresContainer instance.
-    """
-    container = PostgresContainer("postgres:16-alpine")
-    container.start()
-    try:
-        yield container
-    finally:
-        container.stop()
-
-
-# ---------------------------------------------------------------------------
-# 2. Environment variables for the test session
-# ---------------------------------------------------------------------------
-@pytest.fixture(scope="session", autouse=True)
-def _set_test_env(postgres_container: PostgresContainer) -> None:
-    """Override environment variables for the test session.
-
-    Sets connection details so that ``app.core.config.Settings`` picks up
-    the Testcontainers Postgres instance instead of a real database.
-
-    Args:
-        postgres_container: The running Testcontainers Postgres instance.
-    """
-    os.environ["POSTGRES_SERVER"] = postgres_container.get_container_host_ip()
-    os.environ["POSTGRES_PORT"] = str(postgres_container.get_exposed_port(5432))
-    os.environ["POSTGRES_USER"] = postgres_container.username
-    os.environ["POSTGRES_PASSWORD"] = postgres_container.password
-    os.environ["POSTGRES_DB"] = postgres_container.dbname
-    os.environ["SECRET_KEY"] = "test-secret-key-for-testing-only"
-    os.environ["PROJECT_NAME"] = "permit-test"
-
-
-# ---------------------------------------------------------------------------
-# 3. Run migrations against the container
-# ---------------------------------------------------------------------------
-@pytest.fixture(scope="session", autouse=True)
-def _run_migrations(
-    postgres_container: PostgresContainer,
-    _set_test_env: None,  # ensure env is set first
-) -> None:
-    """Apply SQL migration files from the ``migrations/`` directory.
-
-    Reads every ``.sql`` file in alphabetical order and executes it
-    against the Testcontainers Postgres instance.
-
-    Args:
-        postgres_container: The running Testcontainers Postgres instance.
-        _set_test_env: Ensures environment variables are configured first.
-    """
-    import pathlib
-
-    migrations_dir = (
-        pathlib.Path(__file__).resolve().parent.parent.parent / "migrations"
-    )
-    if not migrations_dir.exists():
-        pytest.fail(
-            f"Migrations directory not found: {migrations_dir}. "
-            "Tests require migration SQL files to set up the database schema."
-        )
-
-    dsn = _make_dsn(postgres_container)
-    with psycopg.connect(dsn) as conn:
-        conn.autocommit = True
-        for sql_file in sorted(migrations_dir.glob("*.sql")):
-            conn.execute(sql_file.read_text())
-
-
-# Reuse the session-scoped postgres_container for override_get_db
-
-
 @pytest.fixture(scope="module")
-def override_get_db(postgres_container):
-    dsn = _make_dsn(postgres_container)
+def override_get_db():
+    """Start a dedicated Testcontainers Postgres for this module and
+    override the get_db dependency so endpoints receive a cursor from it.
 
-    def _get_db() -> typing.Generator[Cursor, None, None]:
-        with connect(dsn) as conn:
-            with conn.cursor() as cursor:
-                yield cursor
+    Each test module gets its own isolated container, avoiding
+    cross-module side effects when tests run in parallel.
+    """
+    with PostgresContainer("postgres:18.2-alpine3.23").with_volume_mapping(
+        MIGRATIONS_DIR, "/docker-entrypoint-initdb.d"
+    ) as container:
+        dsn = container.get_connection_url(driver=None)
 
-    app.dependency_overrides[get_db] = _get_db
-    yield
-    app.dependency_overrides.pop(get_db, None)
+        def _get_db() -> typing.Generator[Cursor, None, None]:
+            with connect(dsn) as conn:
+                with conn.cursor() as cursor:
+                    yield cursor
+
+        app.dependency_overrides[get_db] = _get_db
+        yield container
+        app.dependency_overrides.pop(get_db, None)
 
 
+# ---------------------------------------------------------------------------
+# 2. Per-test db_session with transactional rollback
+# ---------------------------------------------------------------------------
 @pytest.fixture
-def client(override_get_db):
-    with TestClient(app) as c:
-        yield c
-
-
-# Per-test db_session fixture for psycopg cursor with rollback
-@pytest.fixture
-def db_session(postgres_container) -> typing.Generator[Cursor, None, None]:
-    dsn = _make_dsn(postgres_container)
-    with connect(dsn, autocommit=False) as conn:
+def db_session(
+    override_get_db: PostgresContainer,
+) -> typing.Generator[Cursor, None, None]:
+    """Provide a psycopg cursor inside an explicit transaction that is
+    always rolled back after each test, ensuring full isolation."""
+    dsn = override_get_db.get_connection_url(driver=None)
+    with connect(dsn, autocommit=True) as conn:
         with conn.cursor() as cursor:
+            cursor.execute("BEGIN")
             try:
                 yield cursor
             finally:
-                conn.rollback()
+                cursor.execute("ROLLBACK")

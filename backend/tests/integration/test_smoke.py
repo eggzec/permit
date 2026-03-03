@@ -41,26 +41,34 @@ def test_db_session_rolls_back_and_isolation(db_session: psycopg.Cursor) -> None
     db_session.execute(
         "SELECT EXISTS ("
         "  SELECT FROM information_schema.tables "
-        "  WHERE table_name = '_test_isolation'"
+        "  WHERE table_schema = 'public'"
+        "    AND table_name = '_test_isolation'"
         ")"
     )
     assert not db_session.fetchone()[0]
 
-    # Write inside the transactional db_session
-    db_session.execute("CREATE TABLE _test_isolation (id serial PRIMARY KEY, val text)")
-    db_session.execute("INSERT INTO _test_isolation (val) VALUES ('should_be_gone')")
-    db_session.execute("SELECT count(*) FROM _test_isolation")
+    # Write inside the explicit transaction
+    db_session.execute(
+        "CREATE TABLE public._test_isolation (id serial PRIMARY KEY, val text)"
+    )
+    db_session.execute(
+        "INSERT INTO public._test_isolation (val) VALUES ('should_be_gone')"
+    )
+    db_session.execute("SELECT count(*) FROM public._test_isolation")
     assert db_session.fetchone()[0] == 1  # visible inside this txn
 
 
 @pytest.mark.integration
-def test_client_health(client: TestClient):
-    """Verify that the TestClient fixture can reach the health endpoint in-process.
+def test_client_health(override_get_db):
+    """Verify that the TestClient can reach the health endpoint in-process.
 
     Sends a GET request to ``/api/v1/health`` and asserts a 200 response
     with ``{"data": {"status": "ok"}}``.
     """
-    resp = client.get("/api/v1/health")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["data"]["status"] == "ok"
+    from app.main import app
+
+    with TestClient(app, raise_server_exceptions=True) as client:
+        resp = client.get("/api/v1/health")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data"]["status"] == "ok"
