@@ -7,7 +7,7 @@ from fastapi.routing import APIRoute
 
 from app.api.main import api_router
 from app.api.middlewares import add_request_id
-from app.core.config import settings
+from app.core.config import Settings
 from app.core.exception_handlers import (
     api_exception_handler,
     validation_exception_handler,
@@ -23,6 +23,12 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    logger.info("Initializing settings")
+    settings = Settings()
+    app.state.settings = settings
+    app.title = settings.PROJECT_NAME
+    logger.info("Settings initialized")
+
     logger.info("Initializing database pool")
     pool = ConnectionPool(str(settings.DATABASE_DSN))
 
@@ -56,7 +62,7 @@ API_V1_STR = "/api/v1"
 
 # also use the lifespan with this to do the prestart and shutdown events
 app = FastAPI(
-    title=settings.PROJECT_NAME,
+    title="API",
     openapi_url=f"{API_V1_STR}/openapi.json",
     generate_unique_id_function=custom_generate_unique_id,
     lifespan=lifespan,

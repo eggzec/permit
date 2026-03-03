@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from psycopg import Cursor
 
+from app.core.config import Settings
 from app.core.exceptions import ServiceUnavailableException
 
 
@@ -17,4 +18,13 @@ def get_db(request: Request) -> Generator[Cursor, None, None]:
             yield cursor
 
 
+def get_settings(request: Request) -> Settings:
+    """Return settings from app state."""
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise ServiceUnavailableException("Settings not initialized")
+    return settings
+
+
 CursorDep = Annotated[Cursor, Depends(get_db)]
+SettingsDep = Annotated[Settings, Depends(get_settings)]

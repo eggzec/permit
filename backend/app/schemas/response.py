@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 T = TypeVar("T")
 
@@ -53,8 +53,8 @@ class ErrorResponse(BaseModel):
         description="Error information containing code, message, http_status, details, and request_id",
     )
 
-    model_config = {
-        "json_schema_extra": {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "error": {
                     "code": "VALIDATION_FAILED",
@@ -65,4 +65,4 @@ class ErrorResponse(BaseModel):
                 }
             }
         }
-    }
+    )

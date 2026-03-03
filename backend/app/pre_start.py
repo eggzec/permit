@@ -9,7 +9,7 @@ from tenacity import (
     wait_fixed,
 )
 
-from app.core.config import settings
+from app.core.config import Settings
 from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
@@ -30,6 +30,7 @@ wait_seconds = 1
 def init() -> None:
     """code to do the pre-start service"""
     # Create a temporary pool for connectivity check
+    settings = Settings()
     pool = None
     try:
         pool = ConnectionPool(str(settings.DATABASE_DSN), open=True)
