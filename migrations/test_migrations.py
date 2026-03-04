@@ -274,152 +274,8 @@ def _make_audit_log(conn: psycopg.Connection) -> uuid.UUID:
 
 
 def snapshot_db_state(container: PostgresContainer) -> str:
-    url = container.get_connection_url(driver=None)
-    with psycopg.connect(url) as conn:
-        parts: list[str] = []
-
-        schemas = conn.execute(
-            "SELECT nspname FROM pg_namespace "
-            "WHERE nspname IN ('reference','app','audit') ORDER BY 1"
-        ).fetchall()
-        parts.append(f"schemas={schemas}")
-
-        tables = conn.execute(
-            "SELECT n.nspname, c.relname, c.relkind, COALESCE(c.relispartition,false) "
-            "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') AND c.relkind IN ('r','p') "
-            "ORDER BY 1,2"
-        ).fetchall()
-        parts.append(f"tables={tables}")
-
-        sequences = conn.execute(
-            "SELECT n.nspname, c.relname FROM pg_class c "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') AND c.relkind='S' ORDER BY 1,2"
-        ).fetchall()
-        parts.append(f"sequences={sequences}")
-
-        functions = conn.execute(
-            "SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) "
-            "FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
-            "WHERE n.nspname IN ('reference','app','audit') ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"functions={functions}")
-
-        triggers = conn.execute(
-            "SELECT n.nspname, c.relname, t.tgname, t.tgenabled "
-            "FROM pg_trigger t "
-            "JOIN pg_class c ON c.oid=t.tgrelid "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') AND NOT t.tgisinternal "
-            "ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"triggers={triggers}")
-
-        indexes = conn.execute(
-            "SELECT n.nspname, c.relname, i.relname, ix.indisunique, ix.indisprimary "
-            "FROM pg_index ix "
-            "JOIN pg_class c ON c.oid=ix.indrelid "
-            "JOIN pg_class i ON i.oid=ix.indexrelid "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') "
-            "ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"indexes={indexes}")
-
-        constraints = conn.execute(
-            "SELECT n.nspname, c.relname, con.conname, con.contype "
-            "FROM pg_constraint con "
-            "JOIN pg_class c ON c.oid=con.conrelid "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname IN ('reference','app','audit') "
-            "ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"constraints={constraints}")
-
-        roles = conn.execute(
-            "SELECT rolname, rolinherit, rolcanlogin, rolbypassrls FROM pg_roles "
-            "WHERE rolname = ANY(%s) ORDER BY rolname",
-            (ALL_GROUP_ROLES,),
-        ).fetchall()
-        parts.append(f"roles={roles}")
-
-        table_privs = conn.execute(
-            "SELECT grantee, table_schema, table_name, privilege_type "
-            "FROM information_schema.role_table_grants "
-            "WHERE table_schema IN ('reference','app','audit') "
-            "ORDER BY grantee, table_schema, table_name, privilege_type"
-        ).fetchall()
-        parts.append(f"table_privs={table_privs}")
-
-        seq_privs = conn.execute(
-            "SELECT grantee, object_schema, object_name, privilege_type "
-            "FROM information_schema.usage_privileges "
-            "WHERE object_type='SEQUENCE' AND object_schema IN ('reference','app','audit') "
-            "ORDER BY grantee, object_schema, object_name, privilege_type"
-        ).fetchall()
-        parts.append(f"seq_privs={seq_privs}")
-
-        default_acls = conn.execute(
-            "SELECT r.rolname, n.nspname, da.defaclobjtype, da.defaclacl "
-            "FROM pg_default_acl da "
-            "JOIN pg_roles r ON r.oid=da.defaclrole "
-            "LEFT JOIN pg_namespace n ON n.oid=da.defaclnamespace "
-            "WHERE r.rolname IN ('reference_owner','audit_owner','app_owner') "
-            "ORDER BY 1,2,3"
-        ).fetchall()
-        parts.append(f"default_acls={default_acls}")
-
-        # RLS: per-table enablement flag
-        rls_enabled = conn.execute(
-            "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
-            "FROM pg_class c "
-            "JOIN pg_namespace n ON n.oid = c.relnamespace "
-            "WHERE n.nspname = 'app' AND c.relkind IN ('r','p') "
-            "ORDER BY c.relname"
-        ).fetchall()
-        parts.append(f"rls_enabled={rls_enabled}")
-
-        # RLS: policy definitions (name, command, qual, with_check)
-        rls_policies = conn.execute(
-            "SELECT schemaname, tablename, policyname, permissive, "
-            "       roles, cmd, qual, with_check "
-            "FROM pg_policies "
-            "WHERE schemaname = 'app' "
-            "ORDER BY tablename, policyname"
-        ).fetchall()
-        parts.append(f"rls_policies={rls_policies}")
-
-        # RLS: EXECUTE grant on set_app_context
-        rls_func_grants = conn.execute(
-            "SELECT grantee, privilege_type "
-            "FROM information_schema.routine_privileges "
-            "WHERE routine_schema = 'app' AND routine_name = 'set_app_context' "
-            "ORDER BY grantee"
-        ).fetchall()
-        parts.append(f"rls_func_grants={rls_func_grants}")
-
-        for tbl in [
-            "license_statuses",
-            "session_statuses",
-            "heartbeat_resp_statuses",
-            "error_codes",
-            "actions",
-        ]:
-            exists = conn.execute(
-                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema='reference' AND table_name=%s)",
-                (tbl,),
-            ).fetchone()[0]
-            if exists:
-                rows = conn.execute(
-                    sql.SQL("SELECT * FROM reference.{} ORDER BY 1").format(
-                        sql.Identifier(tbl)
-                    )
-                ).fetchall()
-                parts.append(f"reference.{tbl}={rows}")
-
-        return hashlib.sha256("\n".join(str(p) for p in parts).encode()).hexdigest()
+    parts = snapshot_db_state_parts(container)
+    return hashlib.sha256("\n".join(parts.values()).encode()).hexdigest()
 
 
 def snapshot_db_state_parts(container: PostgresContainer) -> dict[str, str]:
@@ -1303,11 +1159,10 @@ def test_51_privilege_denial(conn_url, role, sql_stmt):
 
 def test_52_public_role_has_no_create_on_public_schema(conn_url):
     with psycopg.connect(conn_url) as conn:
-        acl = conn.execute(
-            "SELECT nspacl FROM pg_namespace WHERE nspname='public'"
+        has_create = conn.execute(
+            "SELECT has_schema_privilege('public', 'public', 'CREATE')"
         ).fetchone()[0]
-    acl_str = str(acl) if acl else ""
-    assert "=C" not in acl_str, "PUBLIC should not have CREATE on public schema"
+    assert not has_create, "PUBLIC should not have CREATE on public schema"
 
 
 # ===========================================================================

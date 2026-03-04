@@ -212,9 +212,10 @@ DO $$ BEGIN
     CREATE POLICY "sessions_insert_own" ON app."sessions"
         FOR INSERT
         WITH CHECK (
-            "license_id" IN (
-                SELECT "id" FROM app."licenses"
-                WHERE "vendor_id" = current_setting('app.vendor_id', true)::UUID
+            EXISTS (
+                SELECT 1 FROM app."licenses"
+                WHERE "id" = app."sessions"."license_id"
+                  AND "vendor_id" = current_setting('app.vendor_id', true)::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -225,15 +226,17 @@ DO $$ BEGIN
     CREATE POLICY "sessions_update_own" ON app."sessions"
         FOR UPDATE
         USING (
-            "license_id" IN (
-                SELECT "id" FROM app."licenses"
-                WHERE "vendor_id" = current_setting('app.vendor_id', true)::UUID
+            EXISTS (
+                SELECT 1 FROM app."licenses"
+                WHERE "id" = app."sessions"."license_id"
+                  AND "vendor_id" = current_setting('app.vendor_id', true)::UUID
             )
         )
         WITH CHECK (
-            "license_id" IN (
-                SELECT "id" FROM app."licenses"
-                WHERE "vendor_id" = current_setting('app.vendor_id', true)::UUID
+            EXISTS (
+                SELECT 1 FROM app."licenses"
+                WHERE "id" = app."sessions"."license_id"
+                  AND "vendor_id" = current_setting('app.vendor_id', true)::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -244,9 +247,10 @@ DO $$ BEGIN
     CREATE POLICY "sessions_delete_own" ON app."sessions"
         FOR DELETE
         USING (
-            "license_id" IN (
-                SELECT "id" FROM app."licenses"
-                WHERE "vendor_id" = current_setting('app.vendor_id', true)::UUID
+            EXISTS (
+                SELECT 1 FROM app."licenses"
+                WHERE "id" = app."sessions"."license_id"
+                  AND "vendor_id" = current_setting('app.vendor_id', true)::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -280,10 +284,11 @@ DO $$ BEGIN
     CREATE POLICY "heartbeats_insert_own" ON app."heartbeats"
         FOR INSERT
         WITH CHECK (
-            "session_id" IN (
-                SELECT s."id" FROM app."sessions" s
+            EXISTS (
+                SELECT 1 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
-                WHERE l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                WHERE s.id = app."heartbeats"."session_id"
+                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -294,17 +299,19 @@ DO $$ BEGIN
     CREATE POLICY "heartbeats_update_own" ON app."heartbeats"
         FOR UPDATE
         USING (
-            "session_id" IN (
-                SELECT s."id" FROM app."sessions" s
+            EXISTS (
+                SELECT 1 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
-                WHERE l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                WHERE s.id = app."heartbeats"."session_id"
+                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
             )
         )
         WITH CHECK (
-            "session_id" IN (
-                SELECT s."id" FROM app."sessions" s
+            EXISTS (
+                SELECT 1 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
-                WHERE l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                WHERE s.id = app."heartbeats"."session_id"
+                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -315,10 +322,11 @@ DO $$ BEGIN
     CREATE POLICY "heartbeats_delete_own" ON app."heartbeats"
         FOR DELETE
         USING (
-            "session_id" IN (
-                SELECT s."id" FROM app."sessions" s
+            EXISTS (
+                SELECT 1 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
-                WHERE l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                WHERE s.id = app."heartbeats"."session_id"
+                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN

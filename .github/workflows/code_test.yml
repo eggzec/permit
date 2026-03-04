@@ -59,7 +59,6 @@ jobs:
         run: uv run pytest -svm integration
 
   test_migrations:
-    needs: fetch-python-versions
     runs-on: ubuntu-latest
 
     steps:
