@@ -10,10 +10,10 @@
 --   Implements Row-Level Security (RLS) on all tenant-scoped
 --   tables in the app schema. Policies enforce vendor isolation:
 --   queries are automatically filtered to the vendor_id stored
---   in the app.vendor_id session context variable.
+--   in the app.vendor_id transaction context variable.
 --
 -- CONTEXT VARIABLE
---   app.vendor_id — session-local UUID context variable
+--   app.vendor_id — transaction-local UUID context variable
 --   Set before user queries via SELECT set_app_context(vendor_id).
 --   Cast to UUID in all policy conditions.
 --

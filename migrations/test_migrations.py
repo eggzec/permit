@@ -278,168 +278,126 @@ def snapshot_db_state(container: PostgresContainer) -> str:
     with psycopg.connect(url) as conn:
         parts: list[str] = []
 
-        parts.append(
-            f"schemas={
-                conn.execute(
-                    'SELECT nspname FROM pg_namespace '
-                    "WHERE nspname IN ('reference','app','audit') ORDER BY 1"
-                ).fetchall()
-            }"
-        )
+        schemas = conn.execute(
+            "SELECT nspname FROM pg_namespace "
+            "WHERE nspname IN ('reference','app','audit') ORDER BY 1"
+        ).fetchall()
+        parts.append(f"schemas={schemas}")
 
-        parts.append(
-            f"tables={
-                conn.execute(
-                    'SELECT n.nspname, c.relname, c.relkind, COALESCE(c.relispartition,false) '
-                    'FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace '
-                    "WHERE n.nspname IN ('reference','app','audit') AND c.relkind IN ('r','p') "
-                    'ORDER BY 1,2'
-                ).fetchall()
-            }"
-        )
+        tables = conn.execute(
+            "SELECT n.nspname, c.relname, c.relkind, COALESCE(c.relispartition,false) "
+            "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname IN ('reference','app','audit') AND c.relkind IN ('r','p') "
+            "ORDER BY 1,2"
+        ).fetchall()
+        parts.append(f"tables={tables}")
 
-        parts.append(
-            f"sequences={
-                conn.execute(
-                    'SELECT n.nspname, c.relname FROM pg_class c '
-                    'JOIN pg_namespace n ON n.oid=c.relnamespace '
-                    "WHERE n.nspname IN ('reference','app','audit') AND c.relkind='S' ORDER BY 1,2"
-                ).fetchall()
-            }"
-        )
+        sequences = conn.execute(
+            "SELECT n.nspname, c.relname FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname IN ('reference','app','audit') AND c.relkind='S' ORDER BY 1,2"
+        ).fetchall()
+        parts.append(f"sequences={sequences}")
 
-        parts.append(
-            f"functions={
-                conn.execute(
-                    'SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) '
-                    'FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace '
-                    "WHERE n.nspname IN ('reference','app','audit') ORDER BY 1,2,3"
-                ).fetchall()
-            }"
-        )
+        functions = conn.execute(
+            "SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) "
+            "FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace "
+            "WHERE n.nspname IN ('reference','app','audit') ORDER BY 1,2,3"
+        ).fetchall()
+        parts.append(f"functions={functions}")
 
-        parts.append(
-            f"triggers={
-                conn.execute(
-                    'SELECT n.nspname, c.relname, t.tgname, t.tgenabled '
-                    'FROM pg_trigger t '
-                    'JOIN pg_class c ON c.oid=t.tgrelid '
-                    'JOIN pg_namespace n ON n.oid=c.relnamespace '
-                    "WHERE n.nspname IN ('reference','app','audit') AND NOT t.tgisinternal "
-                    'ORDER BY 1,2,3'
-                ).fetchall()
-            }"
-        )
+        triggers = conn.execute(
+            "SELECT n.nspname, c.relname, t.tgname, t.tgenabled "
+            "FROM pg_trigger t "
+            "JOIN pg_class c ON c.oid=t.tgrelid "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname IN ('reference','app','audit') AND NOT t.tgisinternal "
+            "ORDER BY 1,2,3"
+        ).fetchall()
+        parts.append(f"triggers={triggers}")
 
-        parts.append(
-            f"indexes={
-                conn.execute(
-                    'SELECT n.nspname, c.relname, i.relname, ix.indisunique, ix.indisprimary '
-                    'FROM pg_index ix '
-                    'JOIN pg_class c ON c.oid=ix.indrelid '
-                    'JOIN pg_class i ON i.oid=ix.indexrelid '
-                    'JOIN pg_namespace n ON n.oid=c.relnamespace '
-                    "WHERE n.nspname IN ('reference','app','audit') "
-                    'ORDER BY 1,2,3'
-                ).fetchall()
-            }"
-        )
+        indexes = conn.execute(
+            "SELECT n.nspname, c.relname, i.relname, ix.indisunique, ix.indisprimary "
+            "FROM pg_index ix "
+            "JOIN pg_class c ON c.oid=ix.indrelid "
+            "JOIN pg_class i ON i.oid=ix.indexrelid "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname IN ('reference','app','audit') "
+            "ORDER BY 1,2,3"
+        ).fetchall()
+        parts.append(f"indexes={indexes}")
 
-        parts.append(
-            f"constraints={
-                conn.execute(
-                    'SELECT n.nspname, c.relname, con.conname, con.contype '
-                    'FROM pg_constraint con '
-                    'JOIN pg_class c ON c.oid=con.conrelid '
-                    'JOIN pg_namespace n ON n.oid=c.relnamespace '
-                    "WHERE n.nspname IN ('reference','app','audit') "
-                    'ORDER BY 1,2,3'
-                ).fetchall()
-            }"
-        )
+        constraints = conn.execute(
+            "SELECT n.nspname, c.relname, con.conname, con.contype "
+            "FROM pg_constraint con "
+            "JOIN pg_class c ON c.oid=con.conrelid "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname IN ('reference','app','audit') "
+            "ORDER BY 1,2,3"
+        ).fetchall()
+        parts.append(f"constraints={constraints}")
 
-        parts.append(
-            f"roles={
-                conn.execute(
-                    'SELECT rolname, rolinherit, rolcanlogin, rolbypassrls FROM pg_roles '
-                    'WHERE rolname = ANY(%s) ORDER BY rolname',
-                    (ALL_GROUP_ROLES,),
-                ).fetchall()
-            }"
-        )
+        roles = conn.execute(
+            "SELECT rolname, rolinherit, rolcanlogin, rolbypassrls FROM pg_roles "
+            "WHERE rolname = ANY(%s) ORDER BY rolname",
+            (ALL_GROUP_ROLES,),
+        ).fetchall()
+        parts.append(f"roles={roles}")
 
-        parts.append(
-            f"table_privs={
-                conn.execute(
-                    'SELECT grantee, table_schema, table_name, privilege_type '
-                    'FROM information_schema.role_table_grants '
-                    "WHERE table_schema IN ('reference','app','audit') "
-                    'ORDER BY grantee, table_schema, table_name, privilege_type'
-                ).fetchall()
-            }"
-        )
+        table_privs = conn.execute(
+            "SELECT grantee, table_schema, table_name, privilege_type "
+            "FROM information_schema.role_table_grants "
+            "WHERE table_schema IN ('reference','app','audit') "
+            "ORDER BY grantee, table_schema, table_name, privilege_type"
+        ).fetchall()
+        parts.append(f"table_privs={table_privs}")
 
-        parts.append(
-            f"seq_privs={
-                conn.execute(
-                    'SELECT grantee, object_schema, object_name, privilege_type '
-                    'FROM information_schema.usage_privileges '
-                    "WHERE object_type='SEQUENCE' AND object_schema IN ('reference','app','audit') "
-                    'ORDER BY grantee, object_schema, object_name, privilege_type'
-                ).fetchall()
-            }"
-        )
+        seq_privs = conn.execute(
+            "SELECT grantee, object_schema, object_name, privilege_type "
+            "FROM information_schema.usage_privileges "
+            "WHERE object_type='SEQUENCE' AND object_schema IN ('reference','app','audit') "
+            "ORDER BY grantee, object_schema, object_name, privilege_type"
+        ).fetchall()
+        parts.append(f"seq_privs={seq_privs}")
 
-        parts.append(
-            f"default_acls={
-                conn.execute(
-                    'SELECT r.rolname, n.nspname, da.defaclobjtype, da.defaclacl '
-                    'FROM pg_default_acl da '
-                    'JOIN pg_roles r ON r.oid=da.defaclrole '
-                    'LEFT JOIN pg_namespace n ON n.oid=da.defaclnamespace '
-                    "WHERE r.rolname IN ('reference_owner','audit_owner','app_owner') "
-                    'ORDER BY 1,2,3'
-                ).fetchall()
-            }"
-        )
+        default_acls = conn.execute(
+            "SELECT r.rolname, n.nspname, da.defaclobjtype, da.defaclacl "
+            "FROM pg_default_acl da "
+            "JOIN pg_roles r ON r.oid=da.defaclrole "
+            "LEFT JOIN pg_namespace n ON n.oid=da.defaclnamespace "
+            "WHERE r.rolname IN ('reference_owner','audit_owner','app_owner') "
+            "ORDER BY 1,2,3"
+        ).fetchall()
+        parts.append(f"default_acls={default_acls}")
 
         # RLS: per-table enablement flag
-        parts.append(
-            f"rls_enabled={
-                conn.execute(
-                    'SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity '
-                    'FROM pg_class c '
-                    'JOIN pg_namespace n ON n.oid = c.relnamespace '
-                    "WHERE n.nspname = 'app' AND c.relkind IN ('r','p') "
-                    'ORDER BY c.relname'
-                ).fetchall()
-            }"
-        )
+        rls_enabled = conn.execute(
+            "SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity "
+            "FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'app' AND c.relkind IN ('r','p') "
+            "ORDER BY c.relname"
+        ).fetchall()
+        parts.append(f"rls_enabled={rls_enabled}")
 
         # RLS: policy definitions (name, command, qual, with_check)
-        parts.append(
-            f"rls_policies={
-                conn.execute(
-                    'SELECT schemaname, tablename, policyname, permissive, '
-                    '       roles, cmd, qual, with_check '
-                    'FROM pg_policies '
-                    "WHERE schemaname = 'app' "
-                    'ORDER BY tablename, policyname'
-                ).fetchall()
-            }"
-        )
+        rls_policies = conn.execute(
+            "SELECT schemaname, tablename, policyname, permissive, "
+            "       roles, cmd, qual, with_check "
+            "FROM pg_policies "
+            "WHERE schemaname = 'app' "
+            "ORDER BY tablename, policyname"
+        ).fetchall()
+        parts.append(f"rls_policies={rls_policies}")
 
         # RLS: EXECUTE grant on set_app_context
-        parts.append(
-            f"rls_func_grants={
-                conn.execute(
-                    'SELECT grantee, privilege_type '
-                    'FROM information_schema.routine_privileges '
-                    "WHERE routine_schema = 'app' AND routine_name = 'set_app_context' "
-                    'ORDER BY grantee'
-                ).fetchall()
-            }"
-        )
+        rls_func_grants = conn.execute(
+            "SELECT grantee, privilege_type "
+            "FROM information_schema.routine_privileges "
+            "WHERE routine_schema = 'app' AND routine_name = 'set_app_context' "
+            "ORDER BY grantee"
+        ).fetchall()
+        parts.append(f"rls_func_grants={rls_func_grants}")
 
         for tbl in [
             "license_statuses",
@@ -1499,7 +1457,7 @@ def test_61_set_app_context_function_exists(conn_url):
 
 
 def test_61b_set_app_context_not_executable_by_public(conn_url):
-    """PUBLIC must not be able to call set_app_context."""
+    """PUBLIC must not be able to call set_app_context; app roles must have EXECUTE."""
     with psycopg.connect(conn_url) as conn:
         grants = [
             r[0]
@@ -1510,6 +1468,17 @@ def test_61b_set_app_context_not_executable_by_public(conn_url):
             ).fetchall()
         ]
     assert "PUBLIC" not in grants, "PUBLIC should not have EXECUTE on set_app_context"
+    expected_roles = {
+        "app_reader_rls",
+        "app_reader_bypass",
+        "app_writer",
+        "app_deleter",
+    }
+    grantees = set(grants)
+    missing = expected_roles - grantees
+    assert not missing, (
+        f"The following roles are missing EXECUTE on app.set_app_context: {sorted(missing)}"
+    )
 
 
 def test_61c_rls_function_owned_by_app_owner(conn_url):
@@ -1861,4 +1830,4 @@ def test_73_rls_no_leakage_via_app_owner_role_switch(superconn):
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"] + sys.argv[1:])
+    pytest.main([__file__, "-v", "--tb=short", *sys.argv[1:]])
