@@ -37,4 +37,5 @@ testpaths = ["tests"]
 markers = [
     "unit: Pure unit tests (no external dependencies)",
     "integration: Integration tests (require database / containers)",
+    "api: Tests exercising the HTTP API layer (may also hit database)",
 ]
