@@ -16,12 +16,18 @@ class ErrorCode(str, Enum):
     # Authentication & Authorization errors
     AUTH_INVALID = "AUTH_INVALID"
     AUTH_REQUIRED = "AUTH_REQUIRED"
+    AUTH_EXPIRED = "AUTH_EXPIRED"
     FORBIDDEN = "FORBIDDEN"
 
     # Resource errors
     RESOURCE_NOT_FOUND = "RESOURCE_NOT_FOUND"
     RESOURCE_ALREADY_EXISTS = "RESOURCE_ALREADY_EXISTS"
     RESOURCE_CONFLICT = "RESOURCE_CONFLICT"
+
+    # License errors
+    LICENSE_NOT_FOUND = "LICENSE_NOT_FOUND"
+    LICENSE_REVOKED = "LICENSE_REVOKED"
+    LICENSE_EXPIRED = "LICENSE_EXPIRED"
 
     # Business logic errors
     BUSINESS_LOGIC_ERROR = "BUSINESS_LOGIC_ERROR"
@@ -45,12 +51,25 @@ class ErrorDetail(BaseModel):
     message: str = Field(..., description="Detailed error message")
 
 
+class ErrorBodyResponse(BaseModel):
+    """Error response body with all required fields"""
+
+    code: ErrorCode = Field(..., description="Error code")
+    message: str = Field(..., description="Human-readable error message")
+    http_status: int = Field(..., description="HTTP status code matching the response")
+    details: list[ErrorDetail] = Field(
+        default_factory=list,
+        description="Additional error details for validation errors or other context",
+    )
+    request_id: str = Field(..., description="Unique request identifier for tracing")
+
+
 class ErrorResponse(BaseModel):
     """Standard error response envelope"""
 
-    error: dict[str, Any] = Field(
+    error: ErrorBodyResponse = Field(
         ...,
-        description="Error information containing code, message, http_status, details, and request_id",
+        description="Error information with code, message, http_status, details, and request_id",
     )
 
     model_config = ConfigDict(
