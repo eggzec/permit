@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
   schedule:
-    - cron: "0 0 * * 0"  # Runs every Sunday at midnight UTC
+    - cron: "*/5 * * * *"  # Runs every 5 minutes
 
   workflow_dispatch:
 
