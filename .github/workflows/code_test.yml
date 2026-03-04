@@ -31,7 +31,7 @@ jobs:
           echo "supported_versions=$(echo $versions | jq -c '.')"        >> $GITHUB_OUTPUT
           echo "bound_versions=$(echo $versions | jq -c '[.[0],.[-1]]')" >> $GITHUB_OUTPUT
 
-  test:
+  test_backend:
     needs: fetch-python-versions
     runs-on: ubuntu-latest
 
@@ -46,16 +46,26 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: ${{ matrix.python-version }}
-          enable-cache: true
 
       - name: Install dependencies
         run: uv sync --group dev
 
       - name: Unit tests
-        run: uv run pytest -m unit -s
+        working-directory: backend
+        run: uv run pytest -svm unit
 
       - name: Integration tests
-        run: uv run pytest -m integration -s
+        working-directory: backend
+        run: uv run pytest -svm integration
 
+  test_migrations:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v7
       - name: Migration tests
-        run: uv run pytest -s -m "not unit and not integration"
+        run: |
+          uv run migrations/test_migrations.py -n auto
