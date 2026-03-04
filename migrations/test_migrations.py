@@ -1512,6 +1512,80 @@ def test_61b_set_app_context_not_executable_by_public(conn_url):
     assert "PUBLIC" not in grants, "PUBLIC should not have EXECUTE on set_app_context"
 
 
+def test_61c_rls_function_owned_by_app_owner(conn_url):
+    """set_app_context must be owned by app_owner — not the migration runner (superuser).
+
+    Why this matters: if SET LOCAL ROLE app_owner is omitted before CREATE FUNCTION,
+    the function is silently created under the superuser and inherits no app-schema
+    defaults.  The function still *works*, so isolation tests keep passing — only an
+    ownership test catches the regression.
+    """
+    with psycopg.connect(conn_url) as conn:
+        row = conn.execute(
+            "SELECT r.rolname "
+            "FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "JOIN pg_roles r ON r.oid = p.proowner "
+            "WHERE n.nspname = 'app' AND p.proname = 'set_app_context'"
+        ).fetchone()
+    assert row is not None, "app.set_app_context function not found"
+    assert row[0] == "app_owner", (
+        f"set_app_context is owned by '{row[0]}', expected 'app_owner'. "
+        "Check that SET LOCAL ROLE app_owner is active when CREATE FUNCTION runs."
+    )
+
+
+@pytest.mark.parametrize(
+    "table",
+    ["licenses", "node_locked_license_data", "sessions", "heartbeats"],
+)
+def test_61d_rls_tenant_tables_owned_by_app_owner(conn_url, table):
+    """All tenant-scoped tables must be owned by app_owner.
+
+    This ensures the entire RLS surface — including ALTER TABLE ENABLE ROW LEVEL
+    SECURITY and CREATE POLICY — is exercised by a single role and that no
+    step silently requires superuser privileges.
+    """
+    with psycopg.connect(conn_url) as conn:
+        row = conn.execute(
+            "SELECT r.rolname "
+            "FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "JOIN pg_roles r ON r.oid = c.relowner "
+            "WHERE n.nspname = 'app' AND c.relname = %s",
+            (table,),
+        ).fetchone()
+    assert row is not None, f"app.{table} not found"
+    assert row[0] == "app_owner", (
+        f"app.{table} is owned by '{row[0]}', expected 'app_owner'."
+    )
+
+
+def test_61e_audit_trigger_function_owned_by_audit_owner(conn_url):
+    """prevent_audit_update_delete must be owned by audit_owner.
+
+    PostgreSQL does not track the creator of a policy (pg_policy has no
+    polowner column), so policy ownership cannot be verified via system
+    catalogs.  The nearest equivalent ownership check for migration DDL is
+    the trigger function, which does carry a proowner.  If SET LOCAL ROLE
+    audit_owner is absent when 04_audit.sql runs the function is silently
+    created under the superuser.
+    """
+    with psycopg.connect(conn_url) as conn:
+        row = conn.execute(
+            "SELECT r.rolname "
+            "FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "JOIN pg_roles r ON r.oid = p.proowner "
+            "WHERE n.nspname = 'audit' AND p.proname = 'prevent_audit_update_delete'",
+        ).fetchone()
+    assert row is not None, "audit.prevent_audit_update_delete function not found"
+    assert row[0] == "audit_owner", (
+        f"prevent_audit_update_delete is owned by '{row[0]}', expected 'audit_owner'. "
+        "Check that SET LOCAL ROLE audit_owner is active when the function is created in 04_audit.sql."
+    )
+
+
 # ===========================================================================
 # 16. RLS — VENDOR ISOLATION
 # ===========================================================================
@@ -1640,7 +1714,7 @@ def test_67_sessions_isolation(superconn):
     vendor_b_id = insert_vendor(superconn, "vendor_b_81@example.com")
     license_a_id = insert_license(superconn, vendor_a_id)
     license_b_id = insert_license(superconn, vendor_b_id)
-    session_a_id = insert_session(superconn, license_a_id, fingerprint="fp_a")
+    insert_session(superconn, license_a_id, fingerprint="fp_a")
     session_b_id = insert_session(superconn, license_b_id, fingerprint="fp_b")
 
     with superconn.transaction():

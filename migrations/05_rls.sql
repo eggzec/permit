@@ -45,6 +45,11 @@
 
 BEGIN;
 
+-- All DDL in this transaction runs as app_owner.
+-- SET LOCAL ROLE is transaction-scoped: it reverts automatically at COMMIT,
+-- so no RESET ROLE is needed anywhere below.
+SET LOCAL ROLE app_owner;
+
 -- ============================================================
 -- Helper Function: set_app_context(vendor_id UUID)
 -- ============================================================
@@ -53,8 +58,6 @@ BEGIN;
 -- context for all subsequent queries in the session.
 -- ============================================================
 
--- create function as app_owner so defaults in 01_roles.sql apply
-SET LOCAL ROLE app_owner;
 CREATE OR REPLACE FUNCTION app.set_app_context(vendor_id UUID)
 RETURNS void
 LANGUAGE plpgsql
@@ -63,13 +66,23 @@ BEGIN
     PERFORM set_config('app.vendor_id', vendor_id::TEXT, true);
 END;
 $$;
-RESET ROLE;
 
 -- ============================================================
--- app."licenses" — Enable RLS
+-- Enable RLS on all tenant-scoped tables
 -- ============================================================
 
 ALTER TABLE app."licenses" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app."node_locked_license_data" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app."sessions" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app."heartbeats" ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- Policies
+-- ============================================================
+
+-- ============================================================
+-- app."licenses" — Policies
+-- ============================================================
 
 DO $$ BEGIN
     CREATE POLICY "licenses_select_own" ON app."licenses"
@@ -115,15 +128,8 @@ EXCEPTION WHEN duplicate_object THEN
 END $$;
 
 -- ============================================================
--- app."node_locked_license_data" — Enable RLS
+-- app."node_locked_license_data" — Policies
 -- ============================================================
--- For node-locked licenses, isolation is enforced via the
--- parent licenses table. Policies are not strictly needed here,
--- but are included for defense-in-depth and to make the
--- isolation boundary explicit.
--- ============================================================
-
-ALTER TABLE app."node_locked_license_data" ENABLE ROW LEVEL SECURITY;
 
 DO $$ BEGIN
     CREATE POLICY "node_locked_select_own" ON app."node_locked_license_data"
@@ -184,10 +190,8 @@ EXCEPTION WHEN duplicate_object THEN
 END $$;
 
 -- ============================================================
--- app."sessions" — Enable RLS
+-- app."sessions" — Policies
 -- ============================================================
-
-ALTER TABLE app."sessions" ENABLE ROW LEVEL SECURITY;
 
 DO $$ BEGIN
     CREATE POLICY "sessions_select_own" ON app."sessions"
@@ -249,76 +253,12 @@ EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'policy "sessions_delete_own" already exists, skipping';
 END $$;
 
-DO $$ BEGIN
-    CREATE POLICY "node_locked_license_data_select_own" ON app."node_locked_license_data"
-        FOR SELECT
-        USING (
-            EXISTS (
-                SELECT 1
-                FROM app."licenses" l
-                WHERE l.id = app."node_locked_license_data".license_id
-                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
-            )
-        );
-EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE 'policy "node_locked_license_data_select_own" already exists, skipping';
-END $$;
-
-DO $$ BEGIN
-    CREATE POLICY "node_locked_license_data_insert_own" ON app."node_locked_license_data"
-        FOR INSERT
-        WITH CHECK (
-            "license_id" IN (
-                SELECT "id" FROM app."licenses"
-                WHERE "vendor_id" = current_setting('app.vendor_id', true)::UUID
-            )
-        );
-EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE 'policy "node_locked_license_data_insert_own" already exists, skipping';
-END $$;
-
-DO $$ BEGIN
-    CREATE POLICY "node_locked_license_data_update_own" ON app."node_locked_license_data"
-        FOR UPDATE
-        USING (
-            EXISTS (
-                SELECT 1
-                FROM app."licenses" l
-                WHERE l.id = app."node_locked_license_data".license_id
-                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
-            )
-        )
-        WITH CHECK (
-            "license_id" IN (
-                SELECT "id" FROM app."licenses"
-                WHERE "vendor_id" = current_setting('app.vendor_id', true)::UUID
-            )
-        );
-EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE 'policy "node_locked_license_data_update_own" already exists, skipping';
-END $$;
-
-DO $$ BEGIN
-    CREATE POLICY "node_locked_license_data_delete_own" ON app."node_locked_license_data"
-        FOR DELETE
-        USING (
-            "license_id" IN (
-                SELECT "id" FROM app."licenses"
-                WHERE "vendor_id" = current_setting('app.vendor_id', true)::UUID
-            )
-        );
-EXCEPTION WHEN duplicate_object THEN
-    RAISE NOTICE 'policy "node_locked_license_data_delete_own" already exists, skipping';
-END $$;
-
 -- ============================================================
--- app."heartbeats" — Enable RLS
+-- app."heartbeats" — Policies
 -- ============================================================
 -- Partitioned table: RLS is enforced at the parent level and
 -- automatically applied to all partitions.
 -- ============================================================
-
-ALTER TABLE app."heartbeats" ENABLE ROW LEVEL SECURITY;
 
 DO $$ BEGIN
     CREATE POLICY "heartbeats_select_own" ON app."heartbeats"
