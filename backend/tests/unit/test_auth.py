@@ -121,7 +121,9 @@ class TestAuthService:
                 return_value={"id": vendor_id, "email": "v@test.com"},
             ),
         ):
-            result = signup(cursor, "v@test.com", "password123", "client-1", settings)
+            result = signup(
+                cursor, "v@test.com", "password123", "client-1", settings
+            )
 
         assert result.vendor.id == vendor_id
         assert result.vendor.email == "v@test.com"
@@ -131,10 +133,16 @@ class TestAuthService:
 
         with patch(
             "app.services.auth.get_vendor_by_email",
-            return_value={"id": "x", "email": "v@test.com", "password_hash": "h"},
+            return_value={
+                "id": "x",
+                "email": "v@test.com",
+                "password_hash": "h",
+            },
         ):
             with pytest.raises(ConflictException):
-                signup(cursor, "v@test.com", "password123", "client-1", settings)
+                signup(
+                    cursor, "v@test.com", "password123", "client-1", settings
+                )
 
     def test_login_success(self, settings: Settings):
         cursor = MagicMock()
@@ -149,7 +157,9 @@ class TestAuthService:
                 "password_hash": hashed,
             },
         ):
-            result = login(cursor, "v@test.com", "password123", "client-1", settings)
+            result = login(
+                cursor, "v@test.com", "password123", "client-1", settings
+            )
 
         assert result.access_token
         assert result.refresh_token
@@ -164,7 +174,9 @@ class TestAuthService:
 
         with patch("app.services.auth.get_vendor_by_email", return_value=None):
             with pytest.raises(AuthenticationException):
-                login(cursor, "bad@test.com", "password123", "client-1", settings)
+                login(
+                    cursor, "bad@test.com", "password123", "client-1", settings
+                )
 
     def test_login_wrong_password_raises(self, settings: Settings):
         cursor = MagicMock()
@@ -172,10 +184,16 @@ class TestAuthService:
 
         with patch(
             "app.services.auth.get_vendor_by_email",
-            return_value={"id": "x", "email": "v@test.com", "password_hash": hashed},
+            return_value={
+                "id": "x",
+                "email": "v@test.com",
+                "password_hash": hashed,
+            },
         ):
             with pytest.raises(AuthenticationException):
-                login(cursor, "v@test.com", "wrong-password", "client-1", settings)
+                login(
+                    cursor, "v@test.com", "wrong-password", "client-1", settings
+                )
 
     def test_refresh_success(self, settings: Settings):
         cursor = MagicMock()
@@ -215,7 +233,9 @@ class TestAuthService:
         rt = create_refresh_token(vendor_id, settings)
 
         with patch("app.services.auth.get_vendor_by_id", return_value=None):
-            with pytest.raises(AuthenticationException, match="Vendor not found"):
+            with pytest.raises(
+                AuthenticationException, match="Vendor not found"
+            ):
                 refresh(rt, "client-1", cursor, settings)
 
     def test_signup_concurrent_insert_conflict(self, settings: Settings):
@@ -229,7 +249,9 @@ class TestAuthService:
             patch("app.services.auth.create_vendor", return_value=None),
         ):
             with pytest.raises(ConflictException):
-                signup(cursor, "race@test.com", "password123", "client-1", settings)
+                signup(
+                    cursor, "race@test.com", "password123", "client-1", settings
+                )
 
 
 @pytest.mark.unit
@@ -272,4 +294,14 @@ class TestGetCurrentVendorId:
         creds.credentials = "not.a.jwt"
 
         with pytest.raises(AuthenticationException):
+            get_current_vendor_id(creds, settings)
+
+    def test_malformed_vendor_id_raises(self, settings: Settings):
+        token = create_access_token("invalid-uuid", settings)
+        creds = MagicMock()
+        creds.credentials = token
+
+        with pytest.raises(
+            AuthenticationException, match="Invalid token payload"
+        ):
             get_current_vendor_id(creds, settings)

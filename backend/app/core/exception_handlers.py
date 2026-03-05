@@ -1,5 +1,5 @@
-import uuid
 import logging
+import uuid
 
 from fastapi import Request, status
 from fastapi.exceptions import RequestValidationError
@@ -17,8 +17,12 @@ from app.schemas.response import (
 logger = logging.getLogger(__name__)
 
 
-async def api_exception_handler(request: Request, exc: APIException) -> JSONResponse:
-    """Handle custom API exceptions"""
+def api_exception_handler(request: Request, exc: APIException) -> JSONResponse:
+    """Handle custom API exceptions.
+
+    Returns:
+        JSONResponse: The error response.
+    """
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
     logger.warning(
@@ -46,10 +50,14 @@ async def api_exception_handler(request: Request, exc: APIException) -> JSONResp
     )
 
 
-async def validation_exception_handler(
+def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
-    """Handle Pydantic validation errors"""
+    """Handle Pydantic validation errors.
+
+    Returns:
+        JSONResponse: The validation error response.
+    """
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
     # Parse validation errors
@@ -57,20 +65,12 @@ async def validation_exception_handler(
     for error in exc.errors():
         field_path = ".".join(str(loc) for loc in error["loc"][1:])
         field = field_path if field_path else None
-        details.append(
-            {
-                "field": field,
-                "message": error["msg"],
-            }
-        )
+        details.append({"field": field, "message": error["msg"]})
 
     logger.warning(
         "Validation Error: %d validation errors",
         len(details),
-        extra={
-            "request_id": request_id,
-            "validation_errors": details,
-        },
+        extra={"request_id": request_id, "validation_errors": details},
     )
 
     # Starlette <0.48 compatibility: use getattr fallback to literal 422
@@ -96,15 +96,17 @@ async def validation_exception_handler(
     )
 
 
-async def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Handle all uncaught exceptions"""
+def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Handle all uncaught exceptions.
+
+    Returns:
+        JSONResponse: The generic error response.
+    """
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
     # Log the full traceback server-side
     logger.exception(
-        "Unexpected error: %s",
-        str(exc),
-        extra={"request_id": request_id},
+        "Unexpected error: %s", exc, extra={"request_id": request_id}
     )
 
     # Use typed schema to validate error structure

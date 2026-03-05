@@ -8,7 +8,11 @@ from psycopg import Cursor
 
 
 def get_vendor_by_email(cursor: Cursor, email: str) -> dict[str, Any] | None:
-    """Return a vendor row by email (case-insensitive) or None."""
+    """Return a vendor row by email (case-insensitive) or None.
+
+    Returns:
+        dict[str, Any] | None: The vendor row or None.
+    """
     cursor.execute(
         'SELECT "id", "email", "password_hash" '
         'FROM app."vendors" '
@@ -23,7 +27,11 @@ def get_vendor_by_email(cursor: Cursor, email: str) -> dict[str, Any] | None:
 
 
 def get_vendor_by_id(cursor: Cursor, vendor_id: str) -> dict[str, Any] | None:
-    """Return a vendor row by id or None."""
+    """Return a vendor row by id or None.
+
+    Returns:
+        dict[str, Any] | None: The vendor row or None.
+    """
     cursor.execute(
         'SELECT "id", "email" '
         'FROM app."vendors" '
@@ -44,6 +52,9 @@ def create_vendor(
     Uses ON CONFLICT DO NOTHING so a concurrent insert with the same
     (case-insensitive) email returns None instead of raising a
     UniqueViolation.
+
+    Returns:
+        dict[str, Any] | None: The created vendor row, or None on conflict.
     """
     cursor.execute(
         'INSERT INTO app."vendors" ("email", "password_hash") '

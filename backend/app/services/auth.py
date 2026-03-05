@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid as _uuid
 
 import jwt as pyjwt
 from psycopg import Cursor
@@ -19,6 +20,7 @@ from app.core.security import (
 from app.crud.vendor import create_vendor, get_vendor_by_email, get_vendor_by_id
 from app.schemas.auth import SignupResponse, TokenPair, VendorOut
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,7 +33,11 @@ def signup(
 ) -> SignupResponse:
     """Create a new vendor account.
 
-    Raises ConflictException if the email already exists.
+    Returns:
+        SignupResponse: The created vendor.
+
+    Raises:
+        ConflictException: If the email already exists.
     """
     existing = get_vendor_by_email(cursor, email)
     if existing is not None:
@@ -58,7 +64,11 @@ def login(
 ) -> TokenPair:
     """Authenticate a vendor and return an access/refresh token pair.
 
-    Raises AuthenticationException for invalid credentials.
+    Returns:
+        TokenPair: The access/refresh token pair.
+
+    Raises:
+        AuthenticationException: For invalid credentials.
     """
     vendor = get_vendor_by_email(cursor, email)
     if vendor is None:
@@ -71,8 +81,9 @@ def login(
     # If the hashing library returned an upgraded hash, persist it
     if updated_hash is not None:
         cursor.execute(
-            'UPDATE app."vendors" SET "password_hash" = %s, "updated_at" = NOW() '
-            'WHERE "id" = %s',
+            'UPDATE app."vendors"'
+            ' SET "password_hash" = %s, "updated_at" = NOW()'
+            ' WHERE "id" = %s',
             (updated_hash, vendor["id"]),
         )
 
@@ -84,20 +95,23 @@ def login(
 
 
 def refresh(
-    refresh_token_str: str,
-    client_id: str,
-    cursor: Cursor,
-    settings: Settings,
+    refresh_token_str: str, client_id: str, cursor: Cursor, settings: Settings
 ) -> TokenPair:
     """Issue a new token pair from a valid refresh token.
 
-    Raises AuthenticationException if the token is invalid/expired
-    or if it is not a refresh token.
+    Returns:
+        TokenPair: The new access/refresh token pair.
+
+    Raises:
+        AuthenticationException: If the token is invalid/expired
+            or if it is not a refresh token.
     """
     try:
         payload = decode_token(refresh_token_str, settings)
     except pyjwt.PyJWTError:
-        raise AuthenticationException("Invalid or expired refresh token")
+        raise AuthenticationException(
+            "Invalid or expired refresh token"
+        ) from None
 
     if payload.get("token_type") != "refresh":
         raise AuthenticationException("Invalid token type")
@@ -105,6 +119,11 @@ def refresh(
     vendor_id = payload.get("vendor_id")
     if vendor_id is None:
         raise AuthenticationException("Invalid token payload")
+
+    try:
+        _uuid.UUID(vendor_id)
+    except (ValueError, AttributeError):
+        raise AuthenticationException("Invalid token payload") from None
 
     # Ensure vendor still exists and is not deleted
     vendor = get_vendor_by_id(cursor, vendor_id)
@@ -114,5 +133,7 @@ def refresh(
     access_token = create_access_token(vendor_id, settings)
     new_refresh_token = create_refresh_token(vendor_id, settings)
 
-    logger.info("Token refreshed for vendor: %s (client_id=%s)", vendor_id, client_id)
+    logger.info(
+        "Token refreshed for vendor: %s (client_id=%s)", vendor_id, client_id
+    )
     return TokenPair(access_token=access_token, refresh_token=new_refresh_token)

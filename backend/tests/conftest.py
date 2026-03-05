@@ -19,6 +19,10 @@ from app.main import app
 from psycopg import Cursor, connect
 from testcontainers.postgres import PostgresContainer
 
+from app.api.deps import get_db
+from app.main import app
+
+
 MIGRATIONS_DIR = str(Path(__file__).parents[2] / "migrations")
 
 

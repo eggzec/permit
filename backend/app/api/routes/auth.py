@@ -13,6 +13,7 @@ from app.schemas.auth import (
 from app.schemas.response import SuccessResponse
 from app.services import auth as auth_service
 
+
 router = APIRouter()
 
 
@@ -21,8 +22,14 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
     response_model=SuccessResponse[SignupResponse],
 )
-def signup(body: SignupRequest, cursor: CursorDep, settings: SettingsDep):
-    """Create a new vendor account."""
+def signup(
+    body: SignupRequest, cursor: CursorDep, settings: SettingsDep
+) -> SuccessResponse[SignupResponse]:
+    """Create a new vendor account.
+
+    Returns:
+        SuccessResponse[SignupResponse]: The created vendor.
+    """
     result = auth_service.signup(
         cursor=cursor,
         email=body.email,
@@ -33,12 +40,15 @@ def signup(body: SignupRequest, cursor: CursorDep, settings: SettingsDep):
     return SuccessResponse(data=result)
 
 
-@router.post(
-    "/login",
-    response_model=SuccessResponse[TokenPair],
-)
-def login(body: LoginRequest, cursor: CursorDep, settings: SettingsDep):
-    """Authenticate a vendor and return an access/refresh token pair."""
+@router.post("/login", response_model=SuccessResponse[TokenPair])
+def login(
+    body: LoginRequest, cursor: CursorDep, settings: SettingsDep
+) -> SuccessResponse[TokenPair]:
+    """Authenticate a vendor and return an access/refresh token pair.
+
+    Returns:
+        SuccessResponse[TokenPair]: The token pair.
+    """
     result = auth_service.login(
         cursor=cursor,
         email=body.email,
@@ -49,12 +59,15 @@ def login(body: LoginRequest, cursor: CursorDep, settings: SettingsDep):
     return SuccessResponse(data=result)
 
 
-@router.post(
-    "/refresh",
-    response_model=SuccessResponse[TokenPair],
-)
-def refresh(body: RefreshRequest, cursor: CursorDep, settings: SettingsDep):
-    """Issue a new token pair using a valid refresh token."""
+@router.post("/refresh", response_model=SuccessResponse[TokenPair])
+def refresh(
+    body: RefreshRequest, cursor: CursorDep, settings: SettingsDep
+) -> SuccessResponse[TokenPair]:
+    """Issue a new token pair using a valid refresh token.
+
+    Returns:
+        SuccessResponse[TokenPair]: The new token pair.
+    """
     result = auth_service.refresh(
         refresh_token_str=body.refresh_token,
         client_id=body.client_id,

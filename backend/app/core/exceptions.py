@@ -5,7 +5,7 @@ from starlette import status
 from app.schemas.response import ErrorCode
 
 
-class APIException(Exception):
+class APIException(Exception):  # noqa: N818
     """Base exception for API errors"""
 
     def __init__(
@@ -14,7 +14,7 @@ class APIException(Exception):
         message: str,
         http_status: int,
         details: list[dict[str, Any]] | None = None,
-    ):
+    ) -> None:
         self.error_code = error_code
         self.message = message
         self.http_status = http_status
@@ -29,7 +29,7 @@ class ValidationException(APIException):
         self,
         message: str = "Invalid request parameters",
         details: list[dict[str, Any]] | None = None,
-    ):
+    ) -> None:
         super().__init__(
             error_code=ErrorCode.VALIDATION_FAILED,
             message=message,
@@ -42,7 +42,7 @@ class ValidationException(APIException):
 class AuthenticationException(APIException):
     """Authentication error"""
 
-    def __init__(self, message: str = "Invalid credentials"):
+    def __init__(self, message: str = "Invalid credentials") -> None:
         super().__init__(
             error_code=ErrorCode.AUTH_INVALID,
             message=message,
@@ -53,7 +53,7 @@ class AuthenticationException(APIException):
 class AuthorizationException(APIException):
     """Authorization error"""
 
-    def __init__(self, message: str = "Access denied"):
+    def __init__(self, message: str = "Access denied") -> None:
         super().__init__(
             error_code=ErrorCode.FORBIDDEN,
             message=message,
@@ -64,7 +64,7 @@ class AuthorizationException(APIException):
 class NotFoundException(APIException):
     """Resource not found error"""
 
-    def __init__(self, message: str = "Resource not found"):
+    def __init__(self, message: str = "Resource not found") -> None:
         super().__init__(
             error_code=ErrorCode.RESOURCE_NOT_FOUND,
             message=message,
@@ -75,7 +75,7 @@ class NotFoundException(APIException):
 class ConflictException(APIException):
     """Resource conflict error"""
 
-    def __init__(self, message: str = "Resource conflict"):
+    def __init__(self, message: str = "Resource conflict") -> None:
         super().__init__(
             error_code=ErrorCode.RESOURCE_CONFLICT,
             message=message,
@@ -90,7 +90,7 @@ class BusinessLogicException(APIException):
         self,
         message: str = "Business logic error",
         details: list[dict[str, Any]] | None = None,
-    ):
+    ) -> None:
         super().__init__(
             error_code=ErrorCode.BUSINESS_LOGIC_ERROR,
             message=message,
@@ -103,7 +103,9 @@ class BusinessLogicException(APIException):
 class ServiceUnavailableException(APIException):
     """Service unavailable error"""
 
-    def __init__(self, message: str = "Service temporarily unavailable"):
+    def __init__(
+        self, message: str = "Service temporarily unavailable"
+    ) -> None:
         super().__init__(
             error_code=ErrorCode.SERVICE_UNAVAILABLE,
             message=message,

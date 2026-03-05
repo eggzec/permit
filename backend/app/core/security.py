@@ -8,6 +8,7 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 
 from app.core.config import Settings
 
+
 # BcryptHasher is listed first so new passwords are hashed with bcrypt.
 # Argon2Hasher is kept for verification of legacy hashes.
 password_hash = PasswordHash((BcryptHasher(), Argon2Hasher()))
@@ -17,9 +18,16 @@ ALGORITHM = "HS256"
 
 
 def create_access_token(
-    vendor_id: str, settings: Settings, *, expires_delta: timedelta | None = None
+    vendor_id: str,
+    settings: Settings,
+    *,
+    expires_delta: timedelta | None = None,
 ) -> str:
-    """Create a short-lived access token with vendor_id claim."""
+    """Create a short-lived access token with vendor_id claim.
+
+    Returns:
+        str: The encoded JWT access token.
+    """
     if expires_delta is None:
         expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     expire = datetime.now(timezone.utc) + expires_delta
@@ -32,9 +40,16 @@ def create_access_token(
 
 
 def create_refresh_token(
-    vendor_id: str, settings: Settings, *, expires_delta: timedelta | None = None
+    vendor_id: str,
+    settings: Settings,
+    *,
+    expires_delta: timedelta | None = None,
 ) -> str:
-    """Create a long-lived refresh token with vendor_id claim."""
+    """Create a long-lived refresh token with vendor_id claim.
+
+    Returns:
+        str: The encoded JWT refresh token.
+    """
     if expires_delta is None:
         expires_delta = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     expire = datetime.now(timezone.utc) + expires_delta
@@ -47,7 +62,11 @@ def create_refresh_token(
 
 
 def decode_token(token: str, settings: Settings) -> dict[str, Any]:
-    """Decode and validate a JWT token. Raises jwt.PyJWTError on failure."""
+    """Decode and validate a JWT token.
+
+    Returns:
+        dict[str, Any]: The decoded token payload.
+    """
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
 
 

@@ -1,7 +1,8 @@
 from enum import Enum
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
 
 T = TypeVar("T")
 
@@ -47,7 +48,9 @@ class SuccessResponse(BaseModel, Generic[T]):
 class ErrorDetail(BaseModel):
     """Additional error details"""
 
-    field: str | None = Field(None, description="Field name if validation error")
+    field: str | None = Field(
+        None, description="Field name if validation error"
+    )
     message: str = Field(..., description="Detailed error message")
 
 
@@ -71,7 +74,11 @@ class ErrorResponse(BaseModel):
 
     error: ErrorBodyResponse = Field(
         ...,
-        description="Error information with code, message, http_status, details, and request_id",
+        description=(
+            "Error information containing code,"
+            " message, http_status, details,"
+            " and request_id"
+        ),
     )
 
     model_config = ConfigDict(
@@ -81,7 +88,9 @@ class ErrorResponse(BaseModel):
                     "code": "VALIDATION_FAILED",
                     "message": "Invalid request parameters",
                     "http_status": 422,
-                    "details": [{"field": "email", "message": "Invalid email format"}],
+                    "details": [
+                        {"field": "email", "message": "Invalid email format"}
+                    ],
                     "request_id": "req-123456789",
                 }
             }
