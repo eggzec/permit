@@ -56,7 +56,7 @@ select = [
     "E",   # pycodestyle errors (PEP 8 style guide violations)
     "W",   # pycodestyle warnings (e.g., extra spaces, indentation issues)
     "DOC", # pydoclint issues (e.g., extra or missing return, yield, warnings)
-    "A",   # flake8-buitins (check variable and function names to not shadow builtins)
+    "A",   # flake8-builtins (check variable and function names to not shadow builtins)
     "N",   # Naming convention checks (e.g., PEP 8 variable and function names)
     "F",   # Pyflakes errors (e.g., unused imports, undefined variables)
     "I",   # isort (Ensures imports are sorted properly)

@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from psycopg import Cursor, connect
 from testcontainers.postgres import PostgresContainer
 
-from app.api.deps import CurrentVendorId, get_db, get_settings
+from app.api.deps import CurrentVendorId, CursorDep, get_db, get_settings
 from app.api.main import api_router
 from app.core.config import Settings
 from app.core.exception_handlers import (
@@ -39,8 +39,12 @@ _test_router = _APIRouter()
 
 
 @_test_router.get("/protected-test")
-def _protected_test(vendor_id: CurrentVendorId) -> dict:
-    return {"vendor_id": vendor_id}
+def _protected_test(vendor_id: CurrentVendorId, cursor: CursorDep) -> dict:
+    cursor.execute("SELECT app.set_app_context(%s)", (vendor_id,))
+    cursor.execute("SELECT current_setting('app.vendor_id', true)")
+    row = cursor.fetchone()
+    db_vendor_id = row[0] if row else None
+    return {"vendor_id": vendor_id, "db_vendor_id": db_vendor_id}
 
 
 @pytest.fixture(scope="function")
@@ -295,14 +299,25 @@ class TestProtectedEndpoints:
         )
         assert resp.status_code == 401
 
-    def test_valid_token_returns_vendor_id(
-        self, client: TestClient, test_settings: Settings
-    ):
-        vendor_id = str(uuid.uuid4())
-        token = create_access_token(vendor_id, test_settings)
+    def test_valid_token_returns_vendor_id(self, client: TestClient):
+        email = "protected-test@example.com"
+        _signup(client, email=email)
+        login_resp = client.post(
+            f"{API_V1}/auth/login",
+            json={
+                "email": email,
+                "password": "SecurePass123!",
+                "client_id": "c1",
+            },
+        )
+        assert login_resp.status_code == 200
+        token = login_resp.json()["data"]["access_token"]
+
         resp = client.get(
             f"{API_V1}/protected-test",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
-        assert resp.json()["vendor_id"] == vendor_id
+        body = resp.json()
+        assert body["vendor_id"]
+        assert body["db_vendor_id"] == body["vendor_id"]
