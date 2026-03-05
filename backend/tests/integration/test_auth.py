@@ -20,7 +20,13 @@ from fastapi.testclient import TestClient
 from psycopg import Cursor, connect
 from testcontainers.postgres import PostgresContainer
 
-from app.api.deps import CurrentVendorId, CursorDep, get_db, get_settings
+from app.api.deps import (
+    CurrentVendorId,
+    RLSCursorDep,
+    get_db,
+    get_rls_cursor,
+    get_settings,
+)
 from app.api.main import api_router
 from app.core.config import Settings
 from app.core.exception_handlers import (
@@ -39,8 +45,7 @@ _test_router = _APIRouter()
 
 
 @_test_router.get("/protected-test")
-def _protected_test(vendor_id: CurrentVendorId, cursor: CursorDep) -> dict:
-    cursor.execute("SELECT app.set_app_context(%s)", (vendor_id,))
+def _protected_test(vendor_id: CurrentVendorId, cursor: RLSCursorDep) -> dict:
     cursor.execute("SELECT current_setting('app.vendor_id', true)")
     row = cursor.fetchone()
     db_vendor_id = row[0] if row else None
@@ -100,6 +105,16 @@ def client(
 
     test_app.dependency_overrides[get_db] = _override_get_db
     test_app.dependency_overrides[get_settings] = _override_get_settings
+
+    def _override_get_rls_cursor(
+        vendor_id: CurrentVendorId,
+    ) -> typing.Generator[Cursor, None, None]:
+        with connect(pg_container.get_connection_url()) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT app.set_app_context(%s)", (vendor_id,))
+                yield cur
+
+    test_app.dependency_overrides[get_rls_cursor] = _override_get_rls_cursor
 
     with TestClient(test_app) as tc:
         yield tc
@@ -301,7 +316,8 @@ class TestProtectedEndpoints:
 
     def test_valid_token_returns_vendor_id(self, client: TestClient):
         email = "protected-test@example.com"
-        _signup(client, email=email)
+        signup_data = _signup(client, email=email)
+        created_vendor_id = signup_data["data"]["vendor"]["id"]
         login_resp = client.post(
             f"{API_V1}/auth/login",
             json={
@@ -319,5 +335,5 @@ class TestProtectedEndpoints:
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["vendor_id"]
-        assert body["db_vendor_id"] == body["vendor_id"]
+        assert body["vendor_id"] == created_vendor_id
+        assert body["db_vendor_id"] == created_vendor_id

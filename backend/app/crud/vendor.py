@@ -59,7 +59,7 @@ def create_vendor(
     cursor.execute(
         'INSERT INTO app."vendors" ("email", "password_hash") '
         "VALUES (%s, %s) "
-        'ON CONFLICT (LOWER("email")) DO NOTHING '
+        'ON CONFLICT ((LOWER("email"))) DO NOTHING '
         'RETURNING "id", "email"',
         (email, password_hash),
     )
