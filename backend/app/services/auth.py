@@ -40,6 +40,11 @@ def signup(
     hashed = get_password_hash(password)
     vendor = create_vendor(cursor, email, hashed)
 
+    # create_vendor returns None when a concurrent insert won the race
+    # (ON CONFLICT DO NOTHING).
+    if vendor is None:
+        raise ConflictException("A vendor with this email already exists")
+
     logger.info("Vendor created: %s (client_id=%s)", vendor["id"], client_id)
     return SignupResponse(vendor=VendorOut(**vendor))
 

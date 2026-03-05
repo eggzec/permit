@@ -8,15 +8,19 @@ from __future__ import annotations
 
 import typing
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
+import uuid
 
 import pytest
+from fastapi import APIRouter as _APIRouter
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 from psycopg import Cursor, connect
 from testcontainers.postgres import PostgresContainer
 
-from app.api.deps import get_db, get_settings
+from app.api.deps import CurrentVendorId, get_db, get_settings
 from app.api.main import api_router
 from app.core.config import Settings
 from app.core.exception_handlers import (
@@ -25,13 +29,17 @@ from app.core.exception_handlers import (
     validation_exception_handler,
 )
 from app.core.exceptions import APIException
-from fastapi.exceptions import RequestValidationError
+from app.core.security import create_access_token
 
 MIGRATIONS_DIR = str(Path(__file__).parents[3] / "migrations")
 API_V1 = "/api/v1"
 
+_test_router = _APIRouter()
 
-# ── Module-scoped fixtures ──────────────────────────────────
+
+@_test_router.get("/protected-test")
+def _protected_test(vendor_id: CurrentVendorId) -> dict:
+    return {"vendor_id": vendor_id}
 
 
 @pytest.fixture(scope="module")
@@ -68,6 +76,7 @@ def client(
 
     test_app = FastAPI(lifespan=_noop_lifespan)
     test_app.include_router(api_router, prefix=API_V1)
+    test_app.include_router(_test_router, prefix=API_V1)
     test_app.add_exception_handler(APIException, api_exception_handler)
     test_app.add_exception_handler(RequestValidationError, validation_exception_handler)
     test_app.add_exception_handler(Exception, general_exception_handler)
@@ -87,9 +96,6 @@ def client(
         yield tc
 
 
-# ── Helpers ──────────────────────────────────────────────────
-
-
 def _signup(
     client: TestClient, email: str = "vendor@test.com", password: str = "SecurePass123!"
 ) -> dict:
@@ -106,9 +112,6 @@ def _login(
         f"{API_V1}/auth/login",
         json={"email": email, "password": password, "client_id": "integration-test"},
     ).json()
-
-
-# ── Tests ────────────────────────────────────────────────────
 
 
 @pytest.mark.integration
@@ -240,29 +243,35 @@ class TestRefresh:
 
 @pytest.mark.integration
 class TestProtectedEndpoints:
-    """Verify that protected endpoints reject invalid/missing tokens."""
+    """Verify that protected endpoints reject invalid/missing tokens
+    via the full HTTP layer (Bearer parsing → dependency injection →
+    exception-to-HTTP translation).
+    """
 
     def test_missing_token_401(self, client: TestClient):
-        """A request without Authorization header should be rejected.
+        resp = client.get(f"{API_V1}/protected-test")
+        assert resp.status_code == 401
 
-        We use the health endpoint here as a baseline; in a real app
-        you would test an endpoint that uses CurrentVendorId dependency.
-        This test validates that the dependency itself rejects missing tokens.
-        """
-        from app.api.deps import get_current_vendor_id
-        from app.core.exceptions import AuthenticationException
-
-        # Directly test the dependency
-        from app.core.config import Settings
-
-        settings = Settings(
-            SECRET_KEY="integration-test-secret",
-            PROJECT_NAME="test",
-            POSTGRES_SERVER="localhost",
-            POSTGRES_USER="test",
-            POSTGRES_PASSWORD="test",
-            POSTGRES_DB="test",
+    def test_expired_token_401(self, client: TestClient, test_settings: Settings):
+        token = create_access_token(
+            str(uuid.uuid4()),
+            test_settings,
+            expires_delta=timedelta(seconds=-1),
         )
+        resp = client.get(
+            f"{API_V1}/protected-test",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 401
 
-        with pytest.raises(AuthenticationException, match="Missing"):
-            get_current_vendor_id(None, settings)
+    def test_valid_token_returns_vendor_id(
+        self, client: TestClient, test_settings: Settings
+    ):
+        vendor_id = str(uuid.uuid4())
+        token = create_access_token(vendor_id, test_settings)
+        resp = client.get(
+            f"{API_V1}/protected-test",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["vendor_id"] == vendor_id

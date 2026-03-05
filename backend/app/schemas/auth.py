@@ -1,9 +1,6 @@
 from pydantic import BaseModel, EmailStr, Field
 
 
-# ── Request schemas ──────────────────────────────────────────
-
-
 class SignupRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
@@ -12,16 +9,13 @@ class SignupRequest(BaseModel):
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(..., min_length=8, max_length=128)
     client_id: str = Field(..., min_length=1, max_length=256)
 
 
 class RefreshRequest(BaseModel):
-    refresh_token: str
+    refresh_token: str = Field(..., min_length=8, max_length=4096)
     client_id: str = Field(..., min_length=1, max_length=256)
-
-
-# ── Response schemas ─────────────────────────────────────────
 
 
 class TokenPair(BaseModel):

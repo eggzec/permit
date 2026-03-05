@@ -3,12 +3,14 @@ from typing import Any
 
 import jwt
 from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
 from pwdlib.hashers.bcrypt import BcryptHasher
 
 from app.core.config import Settings
 
-# Use bcrypt only as required by spec
-password_hash = PasswordHash((BcryptHasher(),))
+# BcryptHasher is listed first so new passwords are hashed with bcrypt.
+# Argon2Hasher is kept for verification of legacy hashes.
+password_hash = PasswordHash((BcryptHasher(), Argon2Hasher()))
 
 
 ALGORITHM = "HS256"

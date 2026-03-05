@@ -36,14 +36,23 @@ def get_vendor_by_id(cursor: Cursor, vendor_id: str) -> dict[str, Any] | None:
     return {"id": str(row[0]), "email": row[1]}
 
 
-def create_vendor(cursor: Cursor, email: str, password_hash: str) -> dict[str, Any]:
-    """Insert a new vendor and return the created row."""
+def create_vendor(
+    cursor: Cursor, email: str, password_hash: str
+) -> dict[str, Any] | None:
+    """Insert a new vendor and return the created row.
+
+    Uses ON CONFLICT DO NOTHING so a concurrent insert with the same
+    (case-insensitive) email returns None instead of raising a
+    UniqueViolation.
+    """
     cursor.execute(
         'INSERT INTO app."vendors" ("email", "password_hash") '
         "VALUES (%s, %s) "
+        'ON CONFLICT (LOWER("email")) DO NOTHING '
         'RETURNING "id", "email"',
         (email, password_hash),
     )
     row = cursor.fetchone()
-    assert row is not None
+    if row is None:
+        return None
     return {"id": str(row[0]), "email": row[1]}

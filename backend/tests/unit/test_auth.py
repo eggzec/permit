@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch
 import jwt as pyjwt
 import pytest
 
+from app.api.deps import get_current_vendor_id
 from app.core.config import Settings
 from app.core.exceptions import AuthenticationException, ConflictException
 from app.core.security import (
@@ -25,9 +26,7 @@ from app.core.security import (
     get_password_hash,
     verify_password,
 )
-
-
-# ── Fixture: test settings ──────────────────────────────────
+from app.services.auth import login, refresh, signup
 
 
 @pytest.fixture
@@ -45,9 +44,6 @@ def settings() -> Settings:
     )
 
 
-# ── Password hashing ────────────────────────────────────────
-
-
 @pytest.mark.unit
 class TestPasswordHashing:
     def test_hash_and_verify(self):
@@ -63,9 +59,6 @@ class TestPasswordHashing:
         hashed = get_password_hash("correct-password")
         valid, _ = verify_password("wrong-password", hashed)
         assert valid is False
-
-
-# ── Token creation / decoding ────────────────────────────────
 
 
 @pytest.mark.unit
@@ -113,16 +106,11 @@ class TestTokens:
             decode_token(token, bad_settings)
 
 
-# ── Auth service ─────────────────────────────────────────────
-
-
 @pytest.mark.unit
 class TestAuthService:
     """Test auth service with mocked CRUD layer."""
 
     def test_signup_success(self, settings: Settings):
-        from app.services.auth import signup
-
         cursor = MagicMock()
         vendor_id = str(uuid.uuid4())
 
@@ -139,8 +127,6 @@ class TestAuthService:
         assert result.vendor.email == "v@test.com"
 
     def test_signup_duplicate_email_raises(self, settings: Settings):
-        from app.services.auth import signup
-
         cursor = MagicMock()
 
         with patch(
@@ -151,8 +137,6 @@ class TestAuthService:
                 signup(cursor, "v@test.com", "password123", "client-1", settings)
 
     def test_login_success(self, settings: Settings):
-        from app.services.auth import login
-
         cursor = MagicMock()
         vendor_id = str(uuid.uuid4())
         hashed = get_password_hash("password123")
@@ -171,14 +155,11 @@ class TestAuthService:
         assert result.refresh_token
         assert result.token_type == "bearer"
 
-        # Verify the access token is valid
         payload = decode_token(result.access_token, settings)
         assert payload["vendor_id"] == vendor_id
         assert payload["token_type"] == "access"
 
     def test_login_wrong_email_raises(self, settings: Settings):
-        from app.services.auth import login
-
         cursor = MagicMock()
 
         with patch("app.services.auth.get_vendor_by_email", return_value=None):
@@ -186,8 +167,6 @@ class TestAuthService:
                 login(cursor, "bad@test.com", "password123", "client-1", settings)
 
     def test_login_wrong_password_raises(self, settings: Settings):
-        from app.services.auth import login
-
         cursor = MagicMock()
         hashed = get_password_hash("correct-password")
 
@@ -199,8 +178,6 @@ class TestAuthService:
                 login(cursor, "v@test.com", "wrong-password", "client-1", settings)
 
     def test_refresh_success(self, settings: Settings):
-        from app.services.auth import refresh
-
         cursor = MagicMock()
         vendor_id = str(uuid.uuid4())
         rt = create_refresh_token(vendor_id, settings)
@@ -215,8 +192,6 @@ class TestAuthService:
         assert result.refresh_token
 
     def test_refresh_with_access_token_raises(self, settings: Settings):
-        from app.services.auth import refresh
-
         cursor = MagicMock()
         vendor_id = str(uuid.uuid4())
         at = create_access_token(vendor_id, settings)
@@ -225,8 +200,6 @@ class TestAuthService:
             refresh(at, "client-1", cursor, settings)
 
     def test_refresh_expired_raises(self, settings: Settings):
-        from app.services.auth import refresh
-
         cursor = MagicMock()
         vendor_id = str(uuid.uuid4())
         rt = create_refresh_token(
@@ -237,8 +210,6 @@ class TestAuthService:
             refresh(rt, "client-1", cursor, settings)
 
     def test_refresh_deleted_vendor_raises(self, settings: Settings):
-        from app.services.auth import refresh
-
         cursor = MagicMock()
         vendor_id = str(uuid.uuid4())
         rt = create_refresh_token(vendor_id, settings)
@@ -247,15 +218,23 @@ class TestAuthService:
             with pytest.raises(AuthenticationException, match="Vendor not found"):
                 refresh(rt, "client-1", cursor, settings)
 
+    def test_signup_concurrent_insert_conflict(self, settings: Settings):
+        """Pre-read shows no existing vendor, but the insert collides
+        (create_vendor returns None due to ON CONFLICT DO NOTHING).
+        """
+        cursor = MagicMock()
 
-# ── Auth dependency ──────────────────────────────────────────
+        with (
+            patch("app.services.auth.get_vendor_by_email", return_value=None),
+            patch("app.services.auth.create_vendor", return_value=None),
+        ):
+            with pytest.raises(ConflictException):
+                signup(cursor, "race@test.com", "password123", "client-1", settings)
 
 
 @pytest.mark.unit
 class TestGetCurrentVendorId:
     def test_valid_access_token(self, settings: Settings):
-        from app.api.deps import get_current_vendor_id
-
         vendor_id = str(uuid.uuid4())
         token = create_access_token(vendor_id, settings)
         creds = MagicMock()
@@ -265,14 +244,10 @@ class TestGetCurrentVendorId:
         assert result == vendor_id
 
     def test_missing_credentials_raises(self, settings: Settings):
-        from app.api.deps import get_current_vendor_id
-
         with pytest.raises(AuthenticationException, match="Missing"):
             get_current_vendor_id(None, settings)
 
     def test_refresh_token_rejected(self, settings: Settings):
-        from app.api.deps import get_current_vendor_id
-
         vendor_id = str(uuid.uuid4())
         token = create_refresh_token(vendor_id, settings)
         creds = MagicMock()
@@ -282,8 +257,6 @@ class TestGetCurrentVendorId:
             get_current_vendor_id(creds, settings)
 
     def test_expired_token_raises(self, settings: Settings):
-        from app.api.deps import get_current_vendor_id
-
         vendor_id = str(uuid.uuid4())
         token = create_access_token(
             vendor_id, settings, expires_delta=timedelta(seconds=-1)
@@ -295,8 +268,6 @@ class TestGetCurrentVendorId:
             get_current_vendor_id(creds, settings)
 
     def test_garbage_token_raises(self, settings: Settings):
-        from app.api.deps import get_current_vendor_id
-
         creds = MagicMock()
         creds.credentials = "not.a.jwt"
 

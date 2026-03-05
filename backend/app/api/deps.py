@@ -1,3 +1,4 @@
+import uuid as _uuid
 from collections.abc import Generator
 from typing import Annotated
 
@@ -10,7 +11,6 @@ from app.core.config import Settings
 from app.core.exceptions import AuthenticationException, ServiceUnavailableException
 from app.core.security import decode_token
 
-# ── Re-usable bearer scheme (auto-documents in OpenAPI) ──────
 _bearer_scheme = HTTPBearer(auto_error=False)
 
 
@@ -60,6 +60,13 @@ def get_current_vendor_id(
 
     vendor_id: str | None = payload.get("vendor_id")
     if vendor_id is None:
+        raise AuthenticationException("Invalid token payload")
+
+    # Validate that vendor_id is a well-formed UUID before it reaches
+    # downstream consumers such as app.set_app_context().
+    try:
+        _uuid.UUID(vendor_id)
+    except (ValueError, AttributeError):
         raise AuthenticationException("Invalid token payload")
 
     return vendor_id
