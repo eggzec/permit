@@ -125,25 +125,33 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
     )
 
 
-def _build_error_details(details: list) -> list[ErrorDetail]:
-    """Convert a list of detail dicts to ErrorDetail instances.
-
-    Defensively handles invalid or missing fields by extracting only
-    'field' and 'message', using safe defaults for missing values.
+def _build_error_details(
+    details: list[dict | ErrorDetail] | dict | ErrorDetail | None,
+) -> list[ErrorDetail]:
+    """
+    Converts error details (list, dict, ErrorDetail, or None) into a list of ErrorDetail instances.
 
     Args:
-        details: List of dictionaries with optional 'field' and 'message' keys
+        details: Can be a list of dict/ErrorDetail, a single dict, a single ErrorDetail, or None.
+                 Non-dict/non-ErrorDetail entries are converted to string messages.
 
     Returns:
-        List of ErrorDetail instances
+        List of ErrorDetail instances. Non-dict/non-ErrorDetail entries are preserved as string messages.
     """
-    result = []
-    for d in details if isinstance(details, list) else []:
-        if isinstance(d, dict):
+    if details is None:
+        return []
+    normalized = details if isinstance(details, list) else [details]
+    result: list[ErrorDetail] = []
+    for d in normalized:
+        if isinstance(d, ErrorDetail):
+            result.append(d)
+        elif isinstance(d, dict):
             result.append(
                 ErrorDetail(
                     field=d.get("field"),
-                    message=d.get("message", "Unknown error"),
+                    message=d.get("message") or "Unknown error",
                 )
             )
+        else:
+            result.append(ErrorDetail(field=None, message=str(d)))
     return result
