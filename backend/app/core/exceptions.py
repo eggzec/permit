@@ -33,7 +33,8 @@ class ValidationException(APIException):
         super().__init__(
             error_code=ErrorCode.VALIDATION_FAILED,
             message=message,
-            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            # Use getattr for compatibility with Starlette <0.48 which lacks HTTP_422_UNPROCESSABLE_CONTENT
+            http_status=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             details=details,
         )
 
@@ -93,7 +94,8 @@ class BusinessLogicException(APIException):
         super().__init__(
             error_code=ErrorCode.BUSINESS_LOGIC_ERROR,
             message=message,
-            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            # Use getattr for compatibility with Starlette <0.48 which lacks HTTP_422_UNPROCESSABLE_CONTENT
+            http_status=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             details=details,
         )
 
@@ -106,4 +108,48 @@ class ServiceUnavailableException(APIException):
             error_code=ErrorCode.SERVICE_UNAVAILABLE,
             message=message,
             http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+
+class AuthExpiredException(APIException):
+    """Authentication token expired error"""
+
+    def __init__(self, message: str = "Authentication token has expired"):
+        super().__init__(
+            error_code=ErrorCode.AUTH_EXPIRED,
+            message=message,
+            http_status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+
+class LicenseNotFoundException(APIException):
+    """License not found error"""
+
+    def __init__(self, message: str = "License not found"):
+        super().__init__(
+            error_code=ErrorCode.LICENSE_NOT_FOUND,
+            message=message,
+            http_status=status.HTTP_404_NOT_FOUND,
+        )
+
+
+class LicenseRevokedException(APIException):
+    """License has been revoked error"""
+
+    def __init__(self, message: str = "License has been revoked"):
+        super().__init__(
+            error_code=ErrorCode.LICENSE_REVOKED,
+            message=message,
+            http_status=status.HTTP_409_CONFLICT,
+        )
+
+
+class LicenseExpiredException(APIException):
+    """License has expired error"""
+
+    def __init__(self, message: str = "License has expired"):
+        super().__init__(
+            error_code=ErrorCode.LICENSE_EXPIRED,
+            message=message,
+            http_status=status.HTTP_409_CONFLICT,
         )
