@@ -1,8 +1,9 @@
 """
 Unit tests for exception classes in app.core.exceptions.
 
-Covers: error codes, HTTP status codes, base-class parameter storage,
-details defaulting, custom details, custom messages, and default message lengths.
+Covers: error codes, HTTP status codes, base-class parameter
+storage, details defaulting, custom details, custom messages,
+and default message lengths.
 """
 
 import pytest
@@ -136,9 +137,7 @@ def test_exception_has_correct_error_code(exception_class, expected_code):
             id="not_found_exception",
         ),
         pytest.param(
-            ConflictException,
-            status.HTTP_409_CONFLICT,
-            id="conflict_exception",
+            ConflictException, status.HTTP_409_CONFLICT, id="conflict_exception"
         ),
         pytest.param(
             BusinessLogicException,
@@ -184,7 +183,7 @@ def test_exception_has_correct_http_status(exception_class, expected_status):
 
 @pytest.mark.unit
 def test_api_exception_base_class_stores_all_parameters():
-    """APIException must store all constructor arguments and pass message to str()."""
+    """APIException must store all constructor args."""
     exc = APIException(
         error_code=ErrorCode.VALIDATION_FAILED,
         message="Test error",
@@ -204,7 +203,7 @@ def test_api_exception_base_class_stores_all_parameters():
         f"Expected details with test field, got {exc.details}"
     )
     assert str(exc) == "Test error", (
-        f"Expected str(exc) to return message, got '{str(exc)}'"
+        f"Expected str(exc) to return message, got '{exc!s}'"
     )
 
 
@@ -271,10 +270,16 @@ def test_exception_with_details_none_defaults_to_empty_list(exception_class):
     ],
 )
 def test_exception_stores_custom_details(exception_class, message, details):
-    """Exceptions must store the exact message and details passed at construction."""
+    """Exceptions must store the exact message and
+    details passed at construction.
+    """
     exc = exception_class(message=message, details=details)
-    assert exc.message == message, f"Expected message '{message}', got '{exc.message}'"
-    assert exc.details == details, f"Expected details {details}, got {exc.details}"
+    assert exc.message == message, (
+        f"Expected message '{message}', got '{exc.message}'"
+    )
+    assert exc.details == details, (
+        f"Expected details {details}, got {exc.details}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -291,8 +296,12 @@ def test_exception_stores_custom_details(exception_class, message, details):
         pytest.param(AuthorizationException, id="authorization_exception"),
         pytest.param(NotFoundException, id="not_found_exception"),
         pytest.param(ConflictException, id="conflict_exception"),
-        pytest.param(ServiceUnavailableException, id="service_unavailable_exception"),
-        pytest.param(LicenseNotFoundException, id="license_not_found_exception"),
+        pytest.param(
+            ServiceUnavailableException, id="service_unavailable_exception"
+        ),
+        pytest.param(
+            LicenseNotFoundException, id="license_not_found_exception"
+        ),
         pytest.param(LicenseRevokedException, id="license_revoked_exception"),
         pytest.param(LicenseExpiredException, id="license_expired_exception"),
     ],
@@ -339,8 +348,12 @@ def test_parameterized_exception_accepts_custom_message(exception_class):
         pytest.param(NotFoundException, id="not_found_exception"),
         pytest.param(ConflictException, id="conflict_exception"),
         pytest.param(BusinessLogicException, id="business_logic_exception"),
-        pytest.param(ServiceUnavailableException, id="service_unavailable_exception"),
-        pytest.param(LicenseNotFoundException, id="license_not_found_exception"),
+        pytest.param(
+            ServiceUnavailableException, id="service_unavailable_exception"
+        ),
+        pytest.param(
+            LicenseNotFoundException, id="license_not_found_exception"
+        ),
         pytest.param(LicenseRevokedException, id="license_revoked_exception"),
         pytest.param(LicenseExpiredException, id="license_expired_exception"),
     ],
@@ -380,16 +393,22 @@ def test_api_exception_is_subclass_of_exception():
         pytest.param(ConflictException, id="conflict_exception"),
         pytest.param(ValidationException, id="validation_exception"),
         pytest.param(BusinessLogicException, id="business_logic_exception"),
-        pytest.param(ServiceUnavailableException, id="service_unavailable_exception"),
-        pytest.param(LicenseNotFoundException, id="license_not_found_exception"),
+        pytest.param(
+            ServiceUnavailableException, id="service_unavailable_exception"
+        ),
+        pytest.param(
+            LicenseNotFoundException, id="license_not_found_exception"
+        ),
         pytest.param(LicenseRevokedException, id="license_revoked_exception"),
         pytest.param(LicenseExpiredException, id="license_expired_exception"),
     ],
 )
 def test_concrete_exception_is_subclass_of_api_exception(exception_class):
-    """Every concrete exception class must be a subclass of APIException so that
-    api_exception_handler catches it.  If this invariant breaks, those exceptions
-    silently fall through to general_exception_handler and return 500s."""
+    """Every concrete exception must subclass
+    APIException so api_exception_handler catches it.
+    If this invariant breaks, those exceptions silently
+    fall through to general_exception_handler (500s).
+    """
     assert issubclass(exception_class, APIException), (
         f"{exception_class.__name__} is not a subclass of APIException; "
         f"api_exception_handler will not catch it"

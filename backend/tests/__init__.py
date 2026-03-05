@@ -1,5 +1,6 @@
 import os
 
+
 # Environment variables must be set before importing the app
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
 os.environ.setdefault("PROJECT_NAME", "permit-test")

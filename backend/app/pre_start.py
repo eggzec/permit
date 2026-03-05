@@ -1,5 +1,6 @@
 import logging
 
+from psycopg_pool import ConnectionPool
 from tenacity import (
     after_log,
     before_log,
@@ -10,7 +11,7 @@ from tenacity import (
 )
 
 from app.core.config import Settings
-from psycopg_pool import ConnectionPool
+
 
 logger = logging.getLogger(__name__)
 

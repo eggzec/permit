@@ -1,7 +1,8 @@
 from enum import Enum
 from typing import Generic, TypeVar
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
 
 T = TypeVar("T")
 
@@ -47,7 +48,9 @@ class SuccessResponse(BaseModel, Generic[T]):
 class ErrorDetail(BaseModel):
     """Additional error details"""
 
-    field: str | None = Field(None, description="Field name if validation error")
+    field: str | None = Field(
+        None, description="Field name if validation error"
+    )
     message: str = Field(..., description="Detailed error message")
 
 
@@ -57,13 +60,20 @@ class ErrorBodyResponse(BaseModel):
     code: ErrorCode = Field(..., description="Error code")
     message: str = Field(..., description="Human-readable error message")
     http_status: int = Field(
-        ..., ge=400, le=599, description="HTTP status code matching the response"
+        ...,
+        ge=400,
+        le=599,
+        description="HTTP status code matching the response",
     )
     details: list[ErrorDetail] = Field(
         default_factory=list,
-        description="Additional error details for validation errors or other context",
+        description=(
+            "Additional error details for validation errors or other context"
+        ),
     )
-    request_id: str = Field(..., description="Unique request identifier for tracing")
+    request_id: str = Field(
+        ..., description="Unique request identifier for tracing"
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -71,7 +81,11 @@ class ErrorResponse(BaseModel):
 
     error: ErrorBodyResponse = Field(
         ...,
-        description="Error information with code, message, http_status, details, and request_id",
+        description=(
+            "Error information containing code,"
+            " message, http_status, details,"
+            " and request_id"
+        ),
     )
 
     model_config = ConfigDict(
@@ -81,7 +95,9 @@ class ErrorResponse(BaseModel):
                     "code": "VALIDATION_FAILED",
                     "message": "Invalid request parameters",
                     "http_status": 422,
-                    "details": [{"field": "email", "message": "Invalid email format"}],
+                    "details": [
+                        {"field": "email", "message": "Invalid email format"}
+                    ],
                     "request_id": "req-123456789",
                 }
             }

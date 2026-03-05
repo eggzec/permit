@@ -8,24 +8,66 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 
 from app.core.config import Settings
 
-password_hash = PasswordHash(
-    (
-        Argon2Hasher(),
-        BcryptHasher(),
-    )
-)
+
+# BcryptHasher is listed first so new passwords are hashed with bcrypt.
+# Argon2Hasher is kept for verification of legacy hashes.
+password_hash = PasswordHash((BcryptHasher(), Argon2Hasher()))
 
 
 ALGORITHM = "HS256"
 
 
 def create_access_token(
-    subject: str | Any, expires_delta: timedelta, settings: Settings
+    vendor_id: str,
+    settings: Settings,
+    *,
+    expires_delta: timedelta | None = None,
 ) -> str:
+    """Create a short-lived access token with vendor_id claim.
+
+    Returns:
+        str: The encoded JWT access token.
+    """
+    if expires_delta is None:
+        expires_delta = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     expire = datetime.now(timezone.utc) + expires_delta
-    to_encode = {"exp": expire, "sub": str(subject)}
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+    to_encode = {
+        "vendor_id": str(vendor_id),
+        "exp": expire,
+        "token_type": "access",
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
+def create_refresh_token(
+    vendor_id: str,
+    settings: Settings,
+    *,
+    expires_delta: timedelta | None = None,
+) -> str:
+    """Create a long-lived refresh token with vendor_id claim.
+
+    Returns:
+        str: The encoded JWT refresh token.
+    """
+    if expires_delta is None:
+        expires_delta = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(timezone.utc) + expires_delta
+    to_encode = {
+        "vendor_id": str(vendor_id),
+        "exp": expire,
+        "token_type": "refresh",
+    }
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+
+
+def decode_token(token: str, settings: Settings) -> dict[str, Any]:
+    """Decode and validate a JWT token.
+
+    Returns:
+        dict[str, Any]: The decoded token payload.
+    """
+    return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
 
 
 def verify_password(

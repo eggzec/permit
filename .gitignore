@@ -13,3 +13,4 @@ htmlcov
 *.env
 build/
 dist/
+*.log

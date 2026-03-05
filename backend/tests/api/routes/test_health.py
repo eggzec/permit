@@ -26,7 +26,8 @@ def test_health_check_returns_ok():
         f"Expected status to be 'ok', got '{data['data']['status']}'"
     )
     assert "timestamp" in data["data"], (
-        f"Expected 'timestamp' field in health response data, got keys: {data['data'].keys()}"
+        "Expected 'timestamp' field in health response data,"
+        f" got keys: {data['data'].keys()}"
     )
 
 

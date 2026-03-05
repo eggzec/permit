@@ -1,27 +1,28 @@
-from contextlib import asynccontextmanager
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
+from psycopg_pool import ConnectionPool
 
 from app.api.main import api_router
 from app.api.middlewares import add_request_id
 from app.core.config import Settings
 from app.core.exception_handlers import (
     api_exception_handler,
-    validation_exception_handler,
     general_exception_handler,
+    validation_exception_handler,
 )
 from app.core.exceptions import APIException
-from psycopg_pool import ConnectionPool
 
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: RUF029
     # Startup
     logger.info("Initializing settings")
     settings = Settings()

@@ -1,20 +1,16 @@
-from pydantic import (
-    PostgresDsn,
-    computed_field,
-)
+from pydantic import PostgresDsn, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_ignore_empty=True,
-        extra="ignore",
+        env_file=".env", env_ignore_empty=True, extra="ignore"
     )
 
     SECRET_KEY: str
-    # 60 minutes * 24 hours = 1 day (configurable via ACCESS_TOKEN_EXPIRE_MINUTES env var)
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    # JWT token lifetimes
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # 7 days
 
     PROJECT_NAME: str
     POSTGRES_SERVER: str
@@ -25,7 +21,8 @@ class Settings(BaseSettings):
 
     @computed_field
     @property
-    def DATABASE_DSN(self) -> PostgresDsn:
+    def DATABASE_DSN(self) -> PostgresDsn:  # noqa: N802
+        # See: https://docs.astral.sh/ruff/rules/invalid-function-name/
         return PostgresDsn.build(
             scheme="postgresql",
             username=self.POSTGRES_USER,
