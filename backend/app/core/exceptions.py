@@ -33,7 +33,7 @@ class ValidationException(APIException):
         super().__init__(
             error_code=ErrorCode.VALIDATION_FAILED,
             message=message,
-            # Use getattr for compatibility with Starlette <0.48 which lacks HTTP_422_UNPROCESSABLE_CONTENT
+            # Starlette <0.48 compat: fallback to 422
             http_status=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             details=details,
         )
@@ -94,7 +94,7 @@ class BusinessLogicException(APIException):
         super().__init__(
             error_code=ErrorCode.BUSINESS_LOGIC_ERROR,
             message=message,
-            # Use getattr for compatibility with Starlette <0.48 which lacks HTTP_422_UNPROCESSABLE_CONTENT
+            # Starlette <0.48 compat: fallback to 422
             http_status=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             details=details,
         )
@@ -116,7 +116,9 @@ class ServiceUnavailableException(APIException):
 class AuthExpiredException(APIException):
     """Authentication token expired error"""
 
-    def __init__(self, message: str = "Authentication token has expired"):
+    def __init__(
+        self, message: str = "Authentication token has expired"
+    ) -> None:
         super().__init__(
             error_code=ErrorCode.AUTH_EXPIRED,
             message=message,
@@ -127,7 +129,7 @@ class AuthExpiredException(APIException):
 class LicenseNotFoundException(APIException):
     """License not found error"""
 
-    def __init__(self, message: str = "License not found"):
+    def __init__(self, message: str = "License not found") -> None:
         super().__init__(
             error_code=ErrorCode.LICENSE_NOT_FOUND,
             message=message,
@@ -138,7 +140,7 @@ class LicenseNotFoundException(APIException):
 class LicenseRevokedException(APIException):
     """License has been revoked error"""
 
-    def __init__(self, message: str = "License has been revoked"):
+    def __init__(self, message: str = "License has been revoked") -> None:
         super().__init__(
             error_code=ErrorCode.LICENSE_REVOKED,
             message=message,
@@ -149,7 +151,7 @@ class LicenseRevokedException(APIException):
 class LicenseExpiredException(APIException):
     """License has expired error"""
 
-    def __init__(self, message: str = "License has expired"):
+    def __init__(self, message: str = "License has expired") -> None:
         super().__init__(
             error_code=ErrorCode.LICENSE_EXPIRED,
             message=message,

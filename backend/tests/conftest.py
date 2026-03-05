@@ -13,9 +13,6 @@ import typing
 from pathlib import Path
 
 import pytest
-
-from app.api.deps import get_db
-from app.main import app
 from psycopg import Cursor, connect
 from testcontainers.postgres import PostgresContainer
 
@@ -28,8 +25,10 @@ MIGRATIONS_DIR = str(Path(__file__).parents[2] / "migrations")
 
 @pytest.fixture(scope="module")
 def test_container() -> typing.Generator[PostgresContainer, None, None]:
-    """Fixture that yields a Testcontainers Postgres (PostgresContainer) with migrations applied."""
-    with PostgresContainer("postgres:18.2-alpine3.23", driver=None).with_volume_mapping(
+    """Fixture: Testcontainers Postgres with migrations."""
+    with PostgresContainer(
+        "postgres:18.2-alpine3.23", driver=None
+    ).with_volume_mapping(
         MIGRATIONS_DIR, "/docker-entrypoint-initdb.d"
     ) as container:
         yield container

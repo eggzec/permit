@@ -131,14 +131,16 @@ def _build_error_details(
     details: list[dict | ErrorDetail] | dict | ErrorDetail | None,
 ) -> list[ErrorDetail]:
     """
-    Converts error details (list, dict, ErrorDetail, or None) into a list of ErrorDetail instances.
+    Convert error details into a list of ErrorDetail instances.
+
+    Accepts a list, dict, ErrorDetail, or None and normalises
+    into ``list[ErrorDetail]``.
 
     Args:
-        details: Can be a list of dict/ErrorDetail, a single dict, a single ErrorDetail, or None.
-                 Non-dict/non-ErrorDetail entries are converted to string messages.
+        details: Raw error details in any supported shape.
 
     Returns:
-        List of ErrorDetail instances. Non-dict/non-ErrorDetail entries are preserved as string messages.
+        list[ErrorDetail]: Normalised detail objects.
     """
     if details is None:
         return []

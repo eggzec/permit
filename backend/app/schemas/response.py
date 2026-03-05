@@ -60,13 +60,20 @@ class ErrorBodyResponse(BaseModel):
     code: ErrorCode = Field(..., description="Error code")
     message: str = Field(..., description="Human-readable error message")
     http_status: int = Field(
-        ..., ge=400, le=599, description="HTTP status code matching the response"
+        ...,
+        ge=400,
+        le=599,
+        description="HTTP status code matching the response",
     )
     details: list[ErrorDetail] = Field(
         default_factory=list,
-        description="Additional error details for validation errors or other context",
+        description=(
+            "Additional error details for validation errors or other context"
+        ),
     )
-    request_id: str = Field(..., description="Unique request identifier for tracing")
+    request_id: str = Field(
+        ..., description="Unique request identifier for tracing"
+    )
 
 
 class ErrorResponse(BaseModel):

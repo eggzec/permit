@@ -1,15 +1,20 @@
 """
-Integration tests for exception handlers in app.core.exception_handlers.
+Integration tests for exception handlers.
 
-Verifies that every handler (api_exception_handler, validation_exception_handler,
-general_exception_handler) produces responses that conform to the error contract:
-correct HTTP status codes, error codes, message round-tripping, details structure,
-request-id presence/format, and uniqueness.
+Verifies that every handler produces responses that conform
+to the error contract: correct HTTP status codes, error codes,
+message round-tripping, details structure, request-id
+presence/format, and uniqueness.
 """
 
 import re
 
 import pytest
+from fastapi import FastAPI, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.testclient import TestClient
+from pydantic import BaseModel
+
 from app.core.exception_handlers import (
     api_exception_handler,
     general_exception_handler,
@@ -29,10 +34,7 @@ from app.core.exceptions import (
     ServiceUnavailableException,
     ValidationException,
 )
-from fastapi import FastAPI, status
-from fastapi.exceptions import RequestValidationError
-from fastapi.testclient import TestClient
-from pydantic import BaseModel
+
 
 # Pre-compiled UUID v4 pattern reused across request-id assertions
 _UUID_V4_RE = re.compile(
@@ -42,11 +44,13 @@ _UUID_V4_RE = re.compile(
 
 @pytest.fixture(scope="module")
 def error_contract_app():
-    """FastAPI app for error contract handler tests (all exception handlers, one endpoint per error type)."""
+    """FastAPI app wired with all exception handlers."""
     app = FastAPI()
 
     app.add_exception_handler(APIException, api_exception_handler)
-    app.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app.add_exception_handler(
+        RequestValidationError, validation_exception_handler
+    )
     app.add_exception_handler(Exception, general_exception_handler)
 
     @app.get("/auth-invalid")
@@ -212,7 +216,7 @@ def error_contract_app():
 def test_error_status_code_and_code_match(
     error_contract_app, endpoint, expected_code, expected_status
 ):
-    """HTTP status code and error code field must match the expected values for every exception type."""
+    """HTTP status and error code must match for every type."""
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get(endpoint)
 
@@ -222,12 +226,14 @@ def test_error_status_code_and_code_match(
     )
     error = response.json()["error"]
     assert error["code"] == expected_code, (
-        f"Expected error code '{expected_code}' for {endpoint}, got '{error['code']}'"
+        f"Expected error code '{expected_code}' for "
+        f"{endpoint}, got '{error['code']}'"
     )
     assert error["http_status"] == expected_status, (
-        f"Expected error http_status {expected_status}, got {error['http_status']}"
+        f"Expected error http_status {expected_status},"
+        f" got {error['http_status']}"
     )
-    # Explicitly validate wire vs body contract: response status must match error http_status
+    # Wire vs body contract: status must match
     assert response.status_code == error["http_status"], (
         f"Response status code {response.status_code} does not match "
         f"error http_status {error['http_status']}"
@@ -241,7 +247,7 @@ def test_error_status_code_and_code_match(
 
 @pytest.mark.integration
 def test_error_details_structure(error_contract_app):
-    """Details list must contain exact field+message pairs from the raised exception."""
+    """Details list must contain exact field+message pairs."""
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get("/validation")
 
@@ -250,7 +256,8 @@ def test_error_details_structure(error_contract_app):
         f"Expected 'details' field in error response, got keys: {error.keys()}"
     )
     assert len(error["details"]) == 2, (
-        f"Expected 2 detail entries, got {len(error['details'])}: {error['details']}"
+        f"Expected 2 detail entries, got "
+        f"{len(error['details'])}: {error['details']}"
     )
 
     detail1 = error["details"][0]
@@ -267,13 +274,14 @@ def test_error_details_structure(error_contract_app):
         f"Expected second detail field 'password', got '{detail2['field']}'"
     )
     assert detail2["message"] == "Too short", (
-        f"Expected second detail message 'Too short', got '{detail2['message']}'"
+        "Expected second detail message 'Too short',"
+        f" got '{detail2['message']}'"
     )
 
 
 @pytest.mark.integration
 def test_error_details_default_empty(error_contract_app):
-    """Exceptions raised without details must produce an empty details list in the response."""
+    """Exceptions without details must yield empty details."""
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get("/auth-invalid")
 
@@ -282,7 +290,8 @@ def test_error_details_default_empty(error_contract_app):
         f"Expected 'details' field in error response, got keys: {error.keys()}"
     )
     assert error["details"] == [], (
-        f"Expected empty details list for exception without details, got {error['details']}"
+        "Expected empty details list for exception"
+        f" without details, got {error['details']}"
     )
 
 
@@ -303,7 +312,10 @@ def test_validation_handler_nested_field_path(error_contract_app):
 
     assert response.status_code == getattr(
         status, "HTTP_422_UNPROCESSABLE_CONTENT", 422
-    ), f"Expected status 422 for nested validation error, got {response.status_code}"
+    ), (
+        "Expected status 422 for nested validation"
+        f" error, got {response.status_code}"
+    )
     details = response.json()["error"]["details"]
     fields = [d["field"] for d in details]
     assert "address.street" in fields, (
@@ -312,12 +324,15 @@ def test_validation_handler_nested_field_path(error_contract_app):
 
 
 @pytest.mark.integration
-def test_validation_handler_body_level_error_sets_field_to_none(error_contract_app):
-    """When Pydantic emits a body-level error (loc has only one element after slicing),
-    validation_exception_handler must produce field=None in the detail.
+def test_validation_handler_body_level_error_sets_field_to_none(
+    error_contract_app,
+):
+    """Body-level error (loc with one element after slicing)
+    must produce field=None in the detail.
 
-    Sending an integer body against an object-typed endpoint triggers
-    loc=["body"], making loc[1:] empty and field_path="", so field=None.
+    Sending an integer body against an object-typed endpoint
+    triggers loc=["body"], making loc[1:] empty and
+    field_path="", so field=None.
     """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-body", json=5)
@@ -325,13 +340,17 @@ def test_validation_handler_body_level_error_sets_field_to_none(error_contract_a
     assert response.status_code == getattr(
         status, "HTTP_422_UNPROCESSABLE_CONTENT", 422
     ), (
-        f"Expected status 422 for body-level validation error, got {response.status_code}"
+        "Expected status 422 for body-level"
+        f" validation error, got {response.status_code}"
     )
     details = response.json()["error"]["details"]
-    assert len(details) > 0, "Expected at least one validation detail, got empty list"
+    assert len(details) > 0, (
+        "Expected at least one validation detail, got empty list"
+    )
     # At least one detail must have field=None from the body-level loc
     assert any(d["field"] is None for d in details), (
-        f"Expected at least one detail with field=None for a body-level error, got {details}"
+        "Expected at least one detail with"
+        f" field=None for body-level error, got {details}"
     )
 
 
@@ -344,7 +363,9 @@ def test_validation_handler_body_level_error_sets_field_to_none(error_contract_a
 @pytest.mark.parametrize(
     "endpoint,method,json_body,raise_exceptions",
     [
-        pytest.param("/auth-invalid", "get", None, True, id="api_exception_handler"),
+        pytest.param(
+            "/auth-invalid", "get", None, True, id="api_exception_handler"
+        ),
         pytest.param(
             "/validate-body",
             "post",
@@ -360,21 +381,25 @@ def test_validation_handler_body_level_error_sets_field_to_none(error_contract_a
 def test_request_id_header_matches_body_and_is_uuid_v4(
     error_contract_app, endpoint, method, json_body, raise_exceptions
 ):
-    """X-Request-ID header must be present, match the body request_id, and be a valid UUID v4."""
-    client = TestClient(error_contract_app, raise_server_exceptions=raise_exceptions)
+    """X-Request-ID header must match body and be UUID v4."""
+    client = TestClient(
+        error_contract_app, raise_server_exceptions=raise_exceptions
+    )
     request_method = getattr(client, method)
     kwargs = {"json": json_body} if json_body is not None else {}
     response = request_method(endpoint, **kwargs)
 
     assert "X-Request-ID" in response.headers, (
-        f"Expected 'X-Request-ID' header in response, got headers: {list(response.headers.keys())}"
+        "Expected 'X-Request-ID' header, got"
+        f" headers: {list(response.headers.keys())}"
     )
     request_id = response.headers["X-Request-ID"]
     assert request_id, "X-Request-ID header must not be empty"
 
     error = response.json()["error"]
     assert request_id == error["request_id"], (
-        f"Header X-Request-ID '{request_id}' does not match body request_id '{error['request_id']}'"
+        f"Header X-Request-ID '{request_id}' does not"
+        f" match body request_id '{error['request_id']}'"
     )
     assert _UUID_V4_RE.match(request_id), (
         f"request_id '{request_id}' is not a valid UUID v4 format"
@@ -383,13 +408,17 @@ def test_request_id_header_matches_body_and_is_uuid_v4(
 
 @pytest.mark.integration
 def test_request_id_uniqueness_across_requests(error_contract_app):
-    """Repeated requests to the same endpoint must each receive a distinct request_id."""
+    """Repeated requests must each get a distinct request_id."""
     client = TestClient(error_contract_app, raise_server_exceptions=False)
 
-    ids = {client.get("/auth-invalid").json()["error"]["request_id"] for _ in range(5)}
+    ids = {
+        client.get("/auth-invalid").json()["error"]["request_id"]
+        for _ in range(5)
+    }
     assert len(ids) == 5, (
-        f"Expected 5 unique request_ids from 5 requests to the same endpoint, "
-        f"got {len(ids)} unique IDs. request_id may not be regenerated per request."
+        "Expected 5 unique request_ids from 5 requests,"
+        f" got {len(ids)} unique IDs."
+        " request_id may not be regenerated per request."
     )
 
 
@@ -415,8 +444,12 @@ def test_api_exception_handler_returns_correct_structure(error_contract_app):
 
 
 @pytest.mark.integration
-def test_validation_exception_handler_returns_correct_structure(error_contract_app):
-    """validation_exception_handler must return VALIDATION_FAILED with populated details."""
+def test_validation_exception_handler_returns_correct_structure(
+    error_contract_app,
+):
+    """validation_exception_handler must return
+    VALIDATION_FAILED with populated details.
+    """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-body", json={"invalid": "data"})
 
@@ -442,13 +475,16 @@ def test_validation_exception_handler_returns_correct_structure(error_contract_a
             f"Expected 'message' key in detail, got keys: {detail.keys()}"
         )
         assert isinstance(detail["message"], str), (
-            f"Expected detail message to be string, got {type(detail['message'])}"
+            "Expected detail message to be string,"
+            f" got {type(detail['message'])}"
         )
 
 
 @pytest.mark.integration
 def test_general_exception_handler_returns_sanitized_500(error_contract_app):
-    """general_exception_handler must return 500 with a sanitized message, never internal details."""
+    """general_exception_handler must return 500
+    with a sanitized message, never internal details.
+    """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get("/general-error")
 
@@ -474,7 +510,9 @@ def test_general_exception_handler_returns_sanitized_500(error_contract_app):
 
 @pytest.mark.integration
 def test_validation_error_message_and_details(error_contract_app):
-    """validation_exception_handler must return the standard message with non-empty detail messages."""
+    """validation_exception_handler must return the
+    standard message with non-empty detail messages.
+    """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-body", json={"invalid": "data"})
 
@@ -490,7 +528,8 @@ def test_validation_error_message_and_details(error_contract_app):
             "Expected non-empty message in detail, got empty string"
         )
         assert isinstance(detail["message"], str), (
-            f"Expected detail message to be string, got {type(detail['message'])}"
+            "Expected detail message to be string,"
+            f" got {type(detail['message'])}"
         )
 
 
@@ -501,24 +540,36 @@ def test_validation_error_message_and_details(error_contract_app):
         pytest.param("/auth-invalid", "Invalid credentials", id="auth_invalid"),
         pytest.param("/auth-expired", "Token has expired", id="auth_expired"),
         pytest.param("/forbidden", "Access denied", id="forbidden"),
-        pytest.param("/not-found", "Resource not found", id="resource_not_found"),
+        pytest.param(
+            "/not-found", "Resource not found", id="resource_not_found"
+        ),
         pytest.param("/conflict", "Resource conflict", id="resource_conflict"),
         pytest.param("/validation", "Validation failed", id="validation_error"),
         pytest.param(
-            "/business-logic", "Cannot process request", id="business_logic_error"
+            "/business-logic",
+            "Cannot process request",
+            id="business_logic_error",
         ),
         pytest.param(
             "/service-unavailable", "Database is down", id="service_unavailable"
         ),
-        pytest.param("/license-not-found", "No active license", id="license_not_found"),
-        pytest.param("/license-revoked", "License was revoked", id="license_revoked"),
-        pytest.param("/license-expired", "License has expired", id="license_expired"),
+        pytest.param(
+            "/license-not-found", "No active license", id="license_not_found"
+        ),
+        pytest.param(
+            "/license-revoked", "License was revoked", id="license_revoked"
+        ),
+        pytest.param(
+            "/license-expired", "License has expired", id="license_expired"
+        ),
     ],
 )
 def test_raised_error_messages_roundtrip_correctly(
     error_contract_app, endpoint, expected_message
 ):
-    """The exact message passed to the exception constructor must appear in the response."""
+    """The message passed to the constructor must
+    appear in the response.
+    """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get(endpoint)
     error = response.json()["error"]
