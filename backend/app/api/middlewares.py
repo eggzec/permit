@@ -1,9 +1,12 @@
 import uuid
 
 from fastapi import Request, Response
+from starlette.middleware.base import RequestResponseEndpoint
 
 
-async def add_request_id(request: Request, call_next: object) -> Response:
+async def add_request_id(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
     """Add a unique request_id to each request context.
 
     Returns:

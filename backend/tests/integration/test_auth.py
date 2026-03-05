@@ -43,7 +43,7 @@ def _protected_test(vendor_id: CurrentVendorId) -> dict:
     return {"vendor_id": vendor_id}
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def pg_container() -> typing.Generator[PostgresContainer, None, None]:
     with PostgresContainer(
         "postgres:18.2-alpine3.23", driver=None
@@ -53,7 +53,7 @@ def pg_container() -> typing.Generator[PostgresContainer, None, None]:
         yield container
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def test_settings() -> Settings:
     return Settings(
         SECRET_KEY="integration-test-secret-key-32bytes!",
@@ -67,7 +67,7 @@ def test_settings() -> Settings:
     )
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def client(
     pg_container: PostgresContainer, test_settings: Settings
 ) -> typing.Generator[TestClient, None, None]:
