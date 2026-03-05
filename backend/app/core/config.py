@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     )
 
     SECRET_KEY: str
-    # 60 minutes * 24 hours = 1 day (configurable via ACCESS_TOKEN_EXPIRE_MINUTES env var)
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24
+    # JWT token lifetimes
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60  # 1 hour
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7  # 7 days
 
     PROJECT_NAME: str
     POSTGRES_SERVER: str
