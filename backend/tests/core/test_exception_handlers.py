@@ -139,7 +139,8 @@ def error_contract_app():
         pytest.param(
             "/validation",
             "VALIDATION_FAILED",
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # Starlette <0.48 compatibility: use getattr fallback to literal 422
+            getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             id="validation_failed",
         ),
         pytest.param(
@@ -190,7 +191,8 @@ def error_contract_app():
         pytest.param(
             "/business-logic",
             "BUSINESS_LOGIC_ERROR",
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # Starlette <0.48 compatibility: use getattr fallback to literal 422
+            getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             id="business_logic_error",
         ),
         pytest.param(
@@ -214,12 +216,22 @@ def test_error_status_code_and_code_match(
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get(endpoint)
 
-    assert response.status_code == expected_status
+    assert response.status_code == expected_status, (
+        f"Expected HTTP status {expected_status} for {endpoint}, "
+        f"got {response.status_code}: {response.text}"
+    )
     error = response.json()["error"]
-    assert error["code"] == expected_code
-    assert error["http_status"] == expected_status
+    assert error["code"] == expected_code, (
+        f"Expected error code '{expected_code}' for {endpoint}, got '{error['code']}'"
+    )
+    assert error["http_status"] == expected_status, (
+        f"Expected error http_status {expected_status}, got {error['http_status']}"
+    )
     # Explicitly validate wire vs body contract: response status must match error http_status
-    assert response.status_code == error["http_status"]
+    assert response.status_code == error["http_status"], (
+        f"Response status code {response.status_code} does not match "
+        f"error http_status {error['http_status']}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -234,16 +246,29 @@ def test_error_details_structure(error_contract_app):
     response = client.get("/validation")
 
     error = response.json()["error"]
-    assert "details" in error
-    assert len(error["details"]) == 2
+    assert "details" in error, (
+        f"Expected 'details' field in error response, got keys: {error.keys()}"
+    )
+    assert len(error["details"]) == 2, (
+        f"Expected 2 detail entries, got {len(error['details'])}: {error['details']}"
+    )
 
     detail1 = error["details"][0]
-    assert detail1["field"] == "email"
-    assert detail1["message"] == "Invalid email format"
+    assert detail1["field"] == "email", (
+        f"Expected first detail field 'email', got '{detail1['field']}'"
+    )
+    assert detail1["message"] == "Invalid email format", (
+        f"Expected first detail message 'Invalid email format', "
+        f"got '{detail1['message']}'"
+    )
 
     detail2 = error["details"][1]
-    assert detail2["field"] == "password"
-    assert detail2["message"] == "Too short"
+    assert detail2["field"] == "password", (
+        f"Expected second detail field 'password', got '{detail2['field']}'"
+    )
+    assert detail2["message"] == "Too short", (
+        f"Expected second detail message 'Too short', got '{detail2['message']}'"
+    )
 
 
 @pytest.mark.integration
@@ -253,8 +278,12 @@ def test_error_details_default_empty(error_contract_app):
     response = client.get("/auth-invalid")
 
     error = response.json()["error"]
-    assert "details" in error
-    assert error["details"] == []
+    assert "details" in error, (
+        f"Expected 'details' field in error response, got keys: {error.keys()}"
+    )
+    assert error["details"] == [], (
+        f"Expected empty details list for exception without details, got {error['details']}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +301,9 @@ def test_validation_handler_nested_field_path(error_contract_app):
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-nested", json={"address": {}})
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.status_code == getattr(
+        status, "HTTP_422_UNPROCESSABLE_CONTENT", 422
+    ), f"Expected status 422 for nested validation error, got {response.status_code}"
     details = response.json()["error"]["details"]
     fields = [d["field"] for d in details]
     assert "address.street" in fields, (
@@ -291,9 +322,13 @@ def test_validation_handler_body_level_error_sets_field_to_none(error_contract_a
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-body", json=5)
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.status_code == getattr(
+        status, "HTTP_422_UNPROCESSABLE_CONTENT", 422
+    ), (
+        f"Expected status 422 for body-level validation error, got {response.status_code}"
+    )
     details = response.json()["error"]["details"]
-    assert len(details) > 0
+    assert len(details) > 0, "Expected at least one validation detail, got empty list"
     # At least one detail must have field=None from the body-level loc
     assert any(d["field"] is None for d in details), (
         f"Expected at least one detail with field=None for a body-level error, got {details}"
@@ -331,9 +366,11 @@ def test_request_id_header_matches_body_and_is_uuid_v4(
     kwargs = {"json": json_body} if json_body is not None else {}
     response = request_method(endpoint, **kwargs)
 
-    assert "X-Request-ID" in response.headers
+    assert "X-Request-ID" in response.headers, (
+        f"Expected 'X-Request-ID' header in response, got headers: {list(response.headers.keys())}"
+    )
     request_id = response.headers["X-Request-ID"]
-    assert request_id
+    assert request_id, "X-Request-ID header must not be empty"
 
     error = response.json()["error"]
     assert request_id == error["request_id"], (
@@ -352,7 +389,7 @@ def test_request_id_uniqueness_across_requests(error_contract_app):
     ids = {client.get("/auth-invalid").json()["error"]["request_id"] for _ in range(5)}
     assert len(ids) == 5, (
         f"Expected 5 unique request_ids from 5 requests to the same endpoint, "
-        f"got {len(ids)}. request_id may not be regenerated per request."
+        f"got {len(ids)} unique IDs. request_id may not be regenerated per request."
     )
 
 
@@ -367,10 +404,14 @@ def test_api_exception_handler_returns_correct_structure(error_contract_app):
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get("/auth-invalid")
 
-    assert response.status_code == status.HTTP_401_UNAUTHORIZED
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED, (
+        f"Expected status 401 for APIException, got {response.status_code}"
+    )
     error = response.json()["error"]
     for field in ("code", "message", "http_status", "details", "request_id"):
-        assert field in error, f"Missing field '{field}' in error response"
+        assert field in error, (
+            f"Missing field '{field}' in error response, got: {error.keys()}"
+        )
 
 
 @pytest.mark.integration
@@ -379,16 +420,30 @@ def test_validation_exception_handler_returns_correct_structure(error_contract_a
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-body", json={"invalid": "data"})
 
-    assert response.status_code == status.HTTP_422_UNPROCESSABLE_CONTENT
+    assert response.status_code == getattr(
+        status, "HTTP_422_UNPROCESSABLE_CONTENT", 422
+    ), f"Expected status 422 for validation error, got {response.status_code}"
     error = response.json()["error"]
-    assert error["code"] == "VALIDATION_FAILED"
-    assert error["http_status"] == status.HTTP_422_UNPROCESSABLE_CONTENT
-    assert len(error["details"]) > 0
+    assert error["code"] == "VALIDATION_FAILED", (
+        f"Expected code 'VALIDATION_FAILED', got '{error['code']}'"
+    )
+    assert error["http_status"] == getattr(
+        status, "HTTP_422_UNPROCESSABLE_CONTENT", 422
+    ), f"Expected http_status 422, got {error['http_status']}"
+    assert len(error["details"]) > 0, (
+        "Expected at least one validation detail, got empty list"
+    )
 
     for detail in error["details"]:
-        assert "field" in detail
-        assert "message" in detail
-        assert isinstance(detail["message"], str)
+        assert "field" in detail, (
+            f"Expected 'field' key in detail, got keys: {detail.keys()}"
+        )
+        assert "message" in detail, (
+            f"Expected 'message' key in detail, got keys: {detail.keys()}"
+        )
+        assert isinstance(detail["message"], str), (
+            f"Expected detail message to be string, got {type(detail['message'])}"
+        )
 
 
 @pytest.mark.integration
@@ -397,11 +452,19 @@ def test_general_exception_handler_returns_sanitized_500(error_contract_app):
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get("/general-error")
 
-    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR, (
+        f"Expected status 500 for general exception, got {response.status_code}"
+    )
     error = response.json()["error"]
-    assert error["code"] == "INTERNAL_SERVER_ERROR"
-    assert error["http_status"] == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert error["message"] == "An unexpected error occurred"
+    assert error["code"] == "INTERNAL_SERVER_ERROR", (
+        f"Expected code 'INTERNAL_SERVER_ERROR', got '{error['code']}'"
+    )
+    assert error["http_status"] == status.HTTP_500_INTERNAL_SERVER_ERROR, (
+        f"Expected http_status 500, got {error['http_status']}"
+    )
+    assert error["message"] == "An unexpected error occurred", (
+        f"Expected sanitized error message, got: {error['message']}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -416,11 +479,19 @@ def test_validation_error_message_and_details(error_contract_app):
     response = client.post("/validate-body", json={"invalid": "data"})
 
     error = response.json()["error"]
-    assert error["message"] == "Validation error"
-    assert len(error["details"]) > 0
+    assert error["message"] == "Validation error", (
+        f"Expected standard validation error message, got: {error['message']}"
+    )
+    assert len(error["details"]) > 0, (
+        "Expected at least one validation detail, got empty list"
+    )
     for detail in error["details"]:
-        assert detail["message"]
-        assert isinstance(detail["message"], str)
+        assert detail["message"], (
+            "Expected non-empty message in detail, got empty string"
+        )
+        assert isinstance(detail["message"], str), (
+            f"Expected detail message to be string, got {type(detail['message'])}"
+        )
 
 
 @pytest.mark.integration

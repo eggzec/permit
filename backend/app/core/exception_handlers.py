@@ -71,14 +71,16 @@ async def validation_exception_handler(
         "error": {
             "code": ErrorCode.VALIDATION_FAILED.value,
             "message": "Validation error",
-            "http_status": status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # Use getattr for compatibility with Starlette <0.48 which lacks HTTP_422_UNPROCESSABLE_CONTENT
+            "http_status": getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             "details": details,
             "request_id": request_id,
         }
     }
 
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        # Use getattr for compatibility with Starlette <0.48 which lacks HTTP_422_UNPROCESSABLE_CONTENT
+        status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
         content=error_response,
         headers={"X-Request-ID": request_id},
     )

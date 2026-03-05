@@ -111,7 +111,8 @@ def test_exception_has_correct_error_code(exception_class, expected_code):
     [
         pytest.param(
             ValidationException,
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # Starlette <0.48 compatibility: use getattr fallback to literal 422
+            getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             id="validation_exception",
         ),
         pytest.param(
@@ -141,7 +142,8 @@ def test_exception_has_correct_error_code(exception_class, expected_code):
         ),
         pytest.param(
             BusinessLogicException,
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # Starlette <0.48 compatibility: use getattr fallback to literal 422
+            getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             id="business_logic_exception",
         ),
         pytest.param(
@@ -189,11 +191,21 @@ def test_api_exception_base_class_stores_all_parameters():
         http_status=status.HTTP_400_BAD_REQUEST,
         details=[{"field": "test", "message": "error"}],
     )
-    assert exc.error_code == ErrorCode.VALIDATION_FAILED
-    assert exc.message == "Test error"
-    assert exc.http_status == status.HTTP_400_BAD_REQUEST
-    assert exc.details == [{"field": "test", "message": "error"}]
-    assert str(exc) == "Test error"
+    assert exc.error_code == ErrorCode.VALIDATION_FAILED, (
+        f"Expected error_code VALIDATION_FAILED, got {exc.error_code}"
+    )
+    assert exc.message == "Test error", (
+        f"Expected message 'Test error', got '{exc.message}'"
+    )
+    assert exc.http_status == status.HTTP_400_BAD_REQUEST, (
+        f"Expected http_status 400, got {exc.http_status}"
+    )
+    assert exc.details == [{"field": "test", "message": "error"}], (
+        f"Expected details with test field, got {exc.details}"
+    )
+    assert str(exc) == "Test error", (
+        f"Expected str(exc) to return message, got '{str(exc)}'"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -261,8 +273,8 @@ def test_exception_with_details_none_defaults_to_empty_list(exception_class):
 def test_exception_stores_custom_details(exception_class, message, details):
     """Exceptions must store the exact message and details passed at construction."""
     exc = exception_class(message=message, details=details)
-    assert exc.message == message
-    assert exc.details == details
+    assert exc.message == message, f"Expected message '{message}', got '{exc.message}'"
+    assert exc.details == details, f"Expected details {details}, got {exc.details}"
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +301,9 @@ def test_simple_exception_accepts_custom_message(exception_class):
     """Positional-message exceptions must store whatever message is passed."""
     custom_msg = f"Custom message for {exception_class.__name__}"
     exc = exception_class(custom_msg)
-    assert exc.message == custom_msg
+    assert exc.message == custom_msg, (
+        f"Expected message '{custom_msg}', got '{exc.message}'"
+    )
 
 
 @pytest.mark.unit
@@ -304,7 +318,9 @@ def test_parameterized_exception_accepts_custom_message(exception_class):
     """Keyword-message exceptions must store whatever message is passed."""
     custom_msg = f"Custom message for {exception_class.__name__}"
     exc = exception_class(message=custom_msg)
-    assert exc.message == custom_msg
+    assert exc.message == custom_msg, (
+        f"Expected message '{custom_msg}', got '{exc.message}'"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +364,9 @@ def test_exception_default_message_has_reasonable_length(exception_class):
 def test_api_exception_is_subclass_of_exception():
     """APIException must inherit from Exception so the general_exception_handler
     fallback can catch it if the api_exception_handler is ever misconfigured."""
-    assert issubclass(APIException, Exception)
+    assert issubclass(APIException, Exception), (
+        "APIException must be a subclass of Exception"
+    )
 
 
 @pytest.mark.unit

@@ -33,7 +33,8 @@ class ValidationException(APIException):
         super().__init__(
             error_code=ErrorCode.VALIDATION_FAILED,
             message=message,
-            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # Use getattr for compatibility with Starlette <0.48 which lacks HTTP_422_UNPROCESSABLE_CONTENT
+            http_status=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             details=details,
         )
 
@@ -93,7 +94,8 @@ class BusinessLogicException(APIException):
         super().__init__(
             error_code=ErrorCode.BUSINESS_LOGIC_ERROR,
             message=message,
-            http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            # Use getattr for compatibility with Starlette <0.48 which lacks HTTP_422_UNPROCESSABLE_CONTENT
+            http_status=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             details=details,
         )
 

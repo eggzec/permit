@@ -32,11 +32,19 @@ def test_error_body_response_stores_all_fields():
         details=[],
         request_id="req-123",
     )
-    assert error_body.code == ErrorCode.VALIDATION_FAILED
-    assert error_body.message == "Test message"
-    assert error_body.http_status == status.HTTP_400_BAD_REQUEST
-    assert error_body.details == []
-    assert error_body.request_id == "req-123"
+    assert error_body.code == ErrorCode.VALIDATION_FAILED, (
+        f"Expected code VALIDATION_FAILED, got {error_body.code}"
+    )
+    assert error_body.message == "Test message", (
+        f"Expected message 'Test message', got '{error_body.message}'"
+    )
+    assert error_body.http_status == status.HTTP_400_BAD_REQUEST, (
+        f"Expected http_status 400, got {error_body.http_status}"
+    )
+    assert error_body.details == [], f"Expected empty details, got {error_body.details}"
+    assert error_body.request_id == "req-123", (
+        f"Expected request_id 'req-123', got '{error_body.request_id}'"
+    )
 
 
 @pytest.mark.unit
@@ -63,8 +71,12 @@ def test_error_body_response_stores_all_fields():
 )
 def test_error_body_response_required_field_raises_validation_error(kwargs):
     """Omitting a required field on ErrorBodyResponse must raise ValidationError."""
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc_info:
         ErrorBodyResponse(**kwargs)
+    # Optionally verify the missing field is in the error
+    error_fields = {e["loc"][0] for e in exc_info.value.errors()}
+    expected_missing = {"http_status", "request_id"} - kwargs.keys()
+    assert expected_missing & error_fields, f"Expected error for {expected_missing}"
 
 
 @pytest.mark.unit
@@ -76,7 +88,9 @@ def test_error_body_response_details_default_to_empty_list():
         http_status=status.HTTP_400_BAD_REQUEST,
         request_id="req-1",
     )
-    assert body.details == []
+    assert body.details == [], (
+        f"Expected empty details list by default, got {body.details}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -95,8 +109,12 @@ def test_error_response_envelope_structure():
             request_id="req-123",
         )
     )
-    assert isinstance(error_response.error, ErrorBodyResponse)
-    assert error_response.error.http_status == status.HTTP_400_BAD_REQUEST
+    assert isinstance(error_response.error, ErrorBodyResponse), (
+        f"Expected error field to be ErrorBodyResponse, got {type(error_response.error)}"
+    )
+    assert error_response.error.http_status == status.HTTP_400_BAD_REQUEST, (
+        f"Expected wrapped error http_status 400, got {error_response.error.http_status}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -115,16 +133,20 @@ def test_error_detail_requires_message_field():
 def test_error_detail_accepts_field_as_none():
     """ErrorDetail.field is optional — None must be stored as-is."""
     detail = ErrorDetail(field=None, message="Test error")
-    assert detail.field is None
-    assert detail.message == "Test error"
+    assert detail.field is None, f"Expected field to be None, got {detail.field}"
+    assert detail.message == "Test error", (
+        f"Expected message 'Test error', got '{detail.message}'"
+    )
 
 
 @pytest.mark.unit
 def test_error_detail_with_both_fields_populated():
     """ErrorDetail must store both field and message when both are provided."""
     detail = ErrorDetail(field="email", message="Invalid email format")
-    assert detail.field == "email"
-    assert detail.message == "Invalid email format"
+    assert detail.field == "email", f"Expected field 'email', got '{detail.field}'"
+    assert detail.message == "Invalid email format", (
+        f"Expected message 'Invalid email format', got '{detail.message}'"
+    )
 
 
 # ---------------------------------------------------------------------------
