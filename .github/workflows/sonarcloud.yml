@@ -2,34 +2,35 @@ name: SonarCloud
 
 permissions:
   contents: read
-  actions: read
-
 on:
-  workflow_run:
-    workflows: [Tests]
-    types: [completed]
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 jobs:
-  sonarcloud:
-    name: SonarCloud Scan
+  sonarqube:
+    name: SonarQube
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
 
-      - name: Download coverage artifact
-        uses: actions/download-artifact@v4
-        with:
-          pattern: coverage-*
-          path: backend
-          merge-multiple: true
-          run-id: ${{ github.event.workflow_run.id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run tests and generate coverage
+        working-directory: backend
+        run: |
+          uv run coverage run -m pytest -svm unit
+          uv run coverage run --append -m pytest -svm integration
+          uv run coverage xml
 
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-

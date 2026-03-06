@@ -73,15 +73,6 @@ jobs:
           use_oidc: true
           verbose: true
 
-      - name: Upload coverage for SonarCloud
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-${{ matrix.python-version }}
-          path: backend/coverage.xml
-          overwrite: true
-          retention-days: 1
-
   test_migrations:
     runs-on: ubuntu-latest
 
