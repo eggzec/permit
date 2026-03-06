@@ -35,6 +35,10 @@ jobs:
     needs: fetch-python-versions
     runs-on: ubuntu-latest
 
+    permissions:
+      id-token: write
+      contents: read
+
     strategy:
       matrix:
         python-version: ${{ fromJson(needs.fetch-python-versions.outputs.supported_versions) }}
@@ -52,20 +56,44 @@ jobs:
 
       - name: Unit tests
         working-directory: backend
-        run: uv run pytest -svm unit
+        run: uv run coverage run -m pytest -svm unit
 
       - name: Integration tests
         working-directory: backend
-        run: uv run pytest -svm integration
+        run: uv run coverage run --append -m pytest -svm integration
+
+      - name: Generate coverage report
+        working-directory: backend
+        run: uv run coverage xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          fail_ci_if_error: true
+          use_oidc: true
+          verbose: true
 
   test_migrations:
     runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v6
 
       - uses: astral-sh/setup-uv@v7
+
       - name: Migration tests
         run: |
-          uv run migrations/test_migrations.py -n auto
+          uv run --with coverage,pytest-cov \
+            python -m pytest migrations/test_migrations.py -n auto --cov --cov-report=xml
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          fail_ci_if_error: true
+          use_oidc: true
+          verbose: true

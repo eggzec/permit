@@ -1,0 +1,36 @@
+name: SonarCloud
+
+permissions:
+  contents: read
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  sonarqube:
+    name: SonarQube
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run tests and generate coverage
+        working-directory: backend
+        run: |
+          uv run coverage run -m pytest -svm unit
+          uv run coverage run --append -m pytest -svm integration
+          uv run coverage xml
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
