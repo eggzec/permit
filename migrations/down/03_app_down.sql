@@ -2,19 +2,30 @@
 -- Downgrade : App Schema — Business Tables
 -- Platform  : LaaS (License as a Service)
 -- Database  : PostgreSQL 18
--- Run order : 03 — second in the downgrade sequence
+-- Reverses  : 03_app.sql
+-- Run order : 03 — fifth in the downgrade sequence
 -- Depends on: 04_audit_down.sql must have completed first so
 --             that all audit FK references into this schema
 --             have been removed
 -- ============================================================
 --
 -- PURPOSE
---   Drops all business tables in the `app` schema created by
---   03_app.sql, including all heartbeat partitions, indexes,
---   and the extension table.
+--   Drops all business tables, views, partitions, and indexes
+--   in the `app` schema created by 03_app.sql.
+--
+-- ORDER
+--   Views must be dropped before their underlying base tables.
+--   app.v_license_node_locked references app."licenses" and
+--   app."node_locked_license_data" — it is dropped first.
+--
+--   The INSTEAD OF trigger on the view is dropped in
+--   07_audit_triggers_down.sql which runs before this file.
+--   By the time this file runs the view has no triggers
+--   attached and can be dropped cleanly.
 --
 -- IDEMPOTENCY
 --   Safe to re-run multiple times.
+--   • DROP VIEW  IF EXISTS — no error if already absent
 --   • DROP TABLE IF EXISTS — no error if already absent
 --
 -- TRANSACTION
@@ -42,6 +53,12 @@
 -- ============================================================
 
 BEGIN;
+
+-- ============================================================
+-- Drop view first (references base tables)
+-- ============================================================
+
+DROP VIEW IF EXISTS app.v_license_node_locked;
 
 -- ============================================================
 -- Drop app."heartbeats" (partitioned)

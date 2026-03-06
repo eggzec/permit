@@ -1,18 +1,23 @@
 -- ============================================================
--- Down Migration : RLS (Row-Level Security) Policies
+-- Downgrade : RLS (Row-Level Security) Policies
 -- Platform  : LaaS (License as a Service)
 -- Database  : PostgreSQL 18
--- Reverses  : 05_rls.sql
+-- Reverses  : 06_rls.sql
+-- Run order : 06 — second in the downgrade sequence
 -- ============================================================
 --
 -- PURPOSE
---   Drops all RLS policies, revokes the EXECUTE grant on
---   app.set_app_context, drops the helper function, and
---   disables RLS on all tenant-scoped tables.
+--   Drops all RLS policies and disables RLS on all
+--   tenant-scoped tables in the app schema and all audit
+--   tables in the audit schema.
 --
 -- ORDER MATTERS
 --   Policies must be dropped before RLS is disabled so that
 --   a subsequent re-enable starts with a clean slate.
+--
+-- IDEMPOTENCY
+--   DROP POLICY IF EXISTS                — no error if absent
+--   ALTER TABLE DISABLE ROW LEVEL SECURITY — idempotent
 --
 -- ============================================================
 
@@ -95,20 +100,67 @@ DO $$ BEGIN
 END $$;
 
 -- ============================================================
--- Revoke execute grant and drop helper function
+-- audit."audit_logs" — Drop policy, then disable RLS
 -- ============================================================
+
+DROP POLICY IF EXISTS "audit_logs_select_own" ON audit."audit_logs";
 
 DO $$ BEGIN
     IF EXISTS (
-        SELECT 1 FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'app' AND p.proname = 'set_app_context'
+        SELECT 1 FROM pg_class
+        WHERE relname = 'audit_logs'
+        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'audit')
     ) THEN
-        REVOKE EXECUTE ON FUNCTION app.set_app_context(UUID)
-            FROM PUBLIC, app_reader_rls, app_reader_bypass, app_writer, app_deleter;
+        ALTER TABLE audit."audit_logs" DISABLE ROW LEVEL SECURITY;
     END IF;
 END $$;
 
-DROP FUNCTION IF EXISTS app.set_app_context(UUID);
+-- ============================================================
+-- audit."audit_log_vendor_actors" — Drop policy, then disable RLS
+-- ============================================================
+
+DROP POLICY IF EXISTS "audit_log_vendor_actors_select_own" ON audit."audit_log_vendor_actors";
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class
+        WHERE relname = 'audit_log_vendor_actors'
+        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'audit')
+    ) THEN
+        ALTER TABLE audit."audit_log_vendor_actors" DISABLE ROW LEVEL SECURITY;
+    END IF;
+END $$;
+
+-- ============================================================
+-- audit."audit_log_licenses" — Drop policy, then disable RLS
+-- ============================================================
+
+DROP POLICY IF EXISTS "audit_log_licenses_select_own" ON audit."audit_log_licenses";
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class
+        WHERE relname = 'audit_log_licenses'
+        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'audit')
+    ) THEN
+        ALTER TABLE audit."audit_log_licenses" DISABLE ROW LEVEL SECURITY;
+    END IF;
+END $$;
+
+-- ============================================================
+-- audit."audit_log_sessions" — Drop policy, then disable RLS
+-- ============================================================
+
+DROP POLICY IF EXISTS "audit_log_sessions_select_own" ON audit."audit_log_sessions";
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class
+        WHERE relname = 'audit_log_sessions'
+        AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'audit')
+    ) THEN
+        ALTER TABLE audit."audit_log_sessions" DISABLE ROW LEVEL SECURITY;
+    END IF;
+END $$;
 
 COMMIT;

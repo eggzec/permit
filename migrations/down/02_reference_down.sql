@@ -2,7 +2,7 @@
 -- Downgrade : Reference Schema — Lookup Tables
 -- Platform  : LaaS (License as a Service)
 -- Database  : PostgreSQL 18
--- Run order : 02 — third in the downgrade sequence
+-- Run order : 02 — sixth in the downgrade sequence
 -- Depends on: 04_audit_down.sql and 03_app_down.sql must have
 --             completed first so that all FK references to
 --             these tables have been removed

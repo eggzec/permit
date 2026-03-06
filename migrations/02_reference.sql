@@ -49,6 +49,16 @@
 --   (e.g. license_status_code = 'ACTIVE' is readable without a
 --   join). New enum values are added by INSERT only — no UPDATE
 --   or DELETE of existing rows is ever permitted.
+--
+-- ACTION CODE DESIGN
+--   Action codes in reference."actions" are intentionally
+--   resource-agnostic. The resource type and ID are captured
+--   in audit junction tables (audit_log_licenses,
+--   audit_log_sessions, audit_log_vendor_actors). A REVOKED
+--   entry joined to audit_log_licenses means a license was
+--   revoked; joined to audit_log_sessions means a session was
+--   revoked. This allows new resource types to be added in
+--   future without introducing new action codes for common verbs.
 -- ============================================================
 
 BEGIN;
@@ -185,13 +195,20 @@ ON CONFLICT ("code") DO NOTHING;
 -- ============================================================
 -- reference."actions"
 -- ============================================================
--- Auditable action verbs recorded in audit."auditLogs".
+-- Auditable action verbs recorded in audit."audit_logs".
 -- Codes are broadly resource-agnostic; the affected resource
 -- is captured in audit junction tables. This allows new
--- resource types to be added without modifying audit."auditLogs".
--- Exception: HEARTBEAT_ERROR is heartbeat-specific by nature
--- and is an intentional exception to the resource-agnostic
--- principle — documented here to prevent future confusion.
+-- resource types to be added without modifying audit."audit_logs".
+-- Exceptions to the resource-agnostic principle (documented
+-- here to prevent future confusion):
+--   HEARTBEAT_ERROR   — heartbeat-specific by nature
+--   PASSWORD_CHANGED  — vendor-specific by nature
+--   TOKEN_ROTATED     — session-specific by nature
+--   TOKEN_REFRESHED   — vendor auth flow specific
+--   ACTIVATED         — session creation via license activation
+--   LOGIN_SUCCESS     — vendor auth flow specific
+--   LOGIN_FAILED      — vendor auth flow specific
+--   CLEANED           — session CLEANUP transition, system-driven
 -- ============================================================
 
 DO $$ BEGIN
@@ -203,23 +220,27 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table reference."actions" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  reference."actions"               IS 'Lookup table for auditable action verbs recorded in audit."auditLogs". Codes are broadly resource-agnostic; the affected resource is captured in audit junction tables (audit."auditLogLicenses", audit."auditLogSessions", etc.). HEARTBEAT_ERROR is an intentional exception: it is heartbeat-specific by nature.';
+COMMENT ON TABLE  reference."actions"               IS 'Lookup table for auditable action verbs recorded in audit."audit_logs". Codes are broadly resource-agnostic; the affected resource is captured in audit junction tables (audit."audit_log_licenses", audit."audit_log_sessions", etc.). Exceptions (HEARTBEAT_ERROR, PASSWORD_CHANGED, TOKEN_ROTATED, etc.) are heartbeat- or auth-flow-specific by nature and are documented in the migration file header.';
 COMMENT ON COLUMN reference."actions"."code"        IS 'Machine-readable action verb (PK). Examples: CREATED, MODIFIED, REVOKED, DELETED.';
 COMMENT ON COLUMN reference."actions"."description" IS 'Human-readable description of what this action represents in the system.';
 
 INSERT INTO reference."actions" ("code", "description")
 VALUES
-    ('SIGNUP',          'A new actor account was registered on the platform.'),
-    ('LOGIN_SUCCESS',   'An actor successfully authenticated and received an access token.'),
-    ('LOGIN_FAILED',    'An actor authentication attempt failed due to invalid credentials.'),
-    ('TOKEN_REFRESHED', 'An actor obtained a new access token using a valid refresh token.'),
-    ('CREATED',         'A new resource was created.'),
-    ('MODIFIED',        'An existing resource was modified.'),
-    ('REVOKED',         'A resource was revoked by an authorised actor.'),
-    ('EXPIRED',         'A resource was transitioned to an expired state by the system.'),
-    ('ACTIVATED',       'A new session was created via a successful license key activation.'),
-    ('HEARTBEAT_ERROR', 'A heartbeat was received but produced a non-CONTINUE response; the event is recorded in app."heartbeats" for audit continuity.'),
-    ('DELETED',         'A resource was soft-deleted.')
+    ('SIGNUP',           'A new vendor account was registered on the platform.'),
+    ('LOGIN_SUCCESS',    'A vendor successfully authenticated and received an access token.'),
+    ('LOGIN_FAILED',     'A vendor authentication attempt failed due to invalid credentials.'),
+    ('TOKEN_REFRESHED',  'A vendor obtained a new access token using a valid refresh token.'),
+    ('CREATED',          'A new resource was created.'),
+    ('MODIFIED',         'An existing resource had one or more fields modified.'),
+    ('CONFIG_UPDATED',   'Structural policy configuration of a resource was changed (e.g. expires_at, max_grace_secs, max_sessions).'),
+    ('REVOKED',          'A resource was revoked by an authorised actor.'),
+    ('EXPIRED',          'A resource was transitioned to an expired state by the system.'),
+    ('ACTIVATED',        'A new session was created via a successful license key activation.'),
+    ('TOKEN_ROTATED',    'A session bearer token was rotated. Hash values are never recorded.'),
+    ('HEARTBEAT_ERROR',  'A heartbeat was received but produced a non-CONTINUE response; the event is recorded in app."heartbeats" for audit continuity.'),
+    ('DELETED',          'A resource was soft-deleted.'),
+    ('PASSWORD_CHANGED', 'A vendor account password was changed. Hash values are never recorded.'),
+    ('CLEANED',          'A session was transitioned to CLEANUP status by the system cleanup job.')
 ON CONFLICT ("code") DO NOTHING;
 
 COMMIT;

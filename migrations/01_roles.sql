@@ -52,6 +52,20 @@
 --   for objects created BY that owner role. Objects created by
 --   postgres would inherit no default privileges.
 --
+-- LICENSE WRITE PATH
+--   Direct INSERT/UPDATE/DELETE on app."licenses" and
+--   app."node_locked_license_data" is intentionally restricted
+--   to app_owner only. All application writes to these tables
+--   must go through the subtype views (e.g. app.v_license_node_locked)
+--   which have INSTEAD OF triggers that handle both DML routing
+--   and audit logging atomically. This ensures a unified diff
+--   across the base license table and its extension table is
+--   always captured correctly.
+--
+--   app_writer and app_deleter receive their license write
+--   privileges via GRANT on the view in 03_app.sql, not via
+--   table-level grants here.
+--
 -- LOGIN USER ACTIVATION
 --   ⚠️  A login user with NOINHERIT has NO table-level privileges
 --   until it activates a group role. Two patterns:
@@ -289,6 +303,10 @@ GRANT USAGE ON SCHEMA app       TO app_reader_rls, app_reader_bypass,
                                    app_writer, app_deleter;
 GRANT USAGE ON SCHEMA app       TO audit_owner;
 
+-- audit roles need USAGE on app to resolve table names in RLS
+-- policy subqueries (audit_log_licenses → app.licenses, etc.)
+GRANT USAGE ON SCHEMA app       TO audit_writer, audit_reader;
+
 
 -- ============================================================
 -- DEFAULT PRIVILEGES
@@ -360,6 +378,12 @@ GRANT SELECT                  ON ALL TABLES    IN SCHEMA audit TO audit_reader;
 GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA audit TO audit_writer;
 GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA audit TO audit_writer, audit_reader;
 
+-- Needed for RLS policy subqueries on audit junction tables:
+-- audit_log_licenses  → app."licenses"  (filtered by app RLS)
+-- audit_log_sessions  → app."sessions"  (filtered by app RLS)
+GRANT SELECT                  ON app."licenses" TO audit_writer, audit_reader;
+GRANT SELECT                  ON app."sessions" TO audit_writer, audit_reader;
+
 -- --- app ---
 GRANT SELECT                  ON ALL TABLES    IN SCHEMA app TO app_reader_rls, app_reader_bypass;
 GRANT SELECT, INSERT, UPDATE  ON ALL TABLES    IN SCHEMA app TO app_writer;
@@ -422,5 +446,32 @@ GRANT REFERENCES              ON ALL TABLES    IN SCHEMA app TO audit_owner;
 --   GRANT reference_reader  TO admin_user;
 --   GRANT audit_reader      TO admin_user;
 --   GRANT app_reader_bypass TO admin_user;
+
+
+-- ============================================================
+-- LICENSE BASE TABLE WRITE RESTRICTION
+-- ============================================================
+-- app."licenses" and app."node_locked_license_data" must only
+-- be written through their subtype views (e.g.
+-- app.v_license_node_locked). The INSTEAD OF trigger on each
+-- view handles both DML routing and audit logging atomically,
+-- producing a unified diff across the base and extension tables.
+--
+-- Revoking direct INSERT/UPDATE/DELETE from app_writer and
+-- app_deleter enforces this constraint at the database layer.
+-- app_owner retains full access for migrations and trigger
+-- function internals which run as app_owner via SECURITY DEFINER.
+--
+-- Future license subtypes follow the same pattern: create a
+-- new view joining app."licenses" with the new extension table,
+-- add an INSTEAD OF trigger, and revoke direct writes on the
+-- new extension table from app_writer and app_deleter here.
+-- ============================================================
+
+REVOKE INSERT, UPDATE, DELETE ON app."licenses"
+    FROM app_writer, app_deleter;
+
+REVOKE INSERT, UPDATE, DELETE ON app."node_locked_license_data"
+    FROM app_writer, app_deleter;
 
 COMMIT;

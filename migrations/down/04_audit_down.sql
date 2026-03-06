@@ -2,15 +2,17 @@
 -- Downgrade : Audit Schema — Immutable Audit Tables
 -- Platform  : LaaS (License as a Service)
 -- Database  : PostgreSQL 18
--- Run order : 04 — FIRST in the downgrade sequence
--- Depends on: none — this file must run before all others
+-- Reverses  : 04_audit.sql
+-- Run order : 04 — fourth in the downgrade sequence
+-- Depends on: 07, 06, 05 down migrations must have completed
 -- ============================================================
 --
 -- PURPOSE
 --   Drops all audit tables, indexes, and the immutability
 --   trigger function created by 04_audit.sql.
---   Must run first because audit tables hold FK references
---   into app."vendors", app."licenses", and app."sessions".
+--   Must run after 07_audit_triggers_down.sql because audit
+--   trigger functions reference audit._insert_log which
+--   targets these tables.
 --
 -- IDEMPOTENCY
 --   Safe to re-run multiple times.

@@ -11,12 +11,33 @@
 --   vendors, licenses, node_locked_license_data, sessions, and
 --   heartbeats (range-partitioned by time).
 --
+--   Also creates app.v_license_node_locked — the mandatory
+--   write interface for node-locked licenses. All application
+--   INSERT/UPDATE/DELETE on licenses and node_locked_license_data
+--   must go through this view. The INSTEAD OF trigger (defined
+--   in 07_audit_triggers.sql) handles both DML routing to the
+--   base tables and audit logging atomically.
+--
+-- LICENSE WRITE PATH
+--   Direct INSERT/UPDATE/DELETE on app."licenses" and
+--   app."node_locked_license_data" is restricted to app_owner
+--   (see 01_roles.sql). Application roles (app_writer,
+--   app_deleter) write through app.v_license_node_locked.
+--
+--   Future license subtypes follow this pattern:
+--     1. Create a new extension table (e.g. app."floating_license_data")
+--     2. Create a new view joining app."licenses" with the extension
+--     3. Add an INSTEAD OF trigger on the view in 07_audit_triggers.sql
+--     4. Grant INSERT/UPDATE/DELETE on the new view to app_writer/app_deleter
+--     5. Revoke direct writes on the new extension table in 01_roles.sql
+--
 -- IDEMPOTENCY
 --   Safe to re-run multiple times.
 --   • CREATE TABLE / partitions : wrapped in DO $$ … EXCEPTION
 --     WHEN duplicate_table THEN RAISE NOTICE
 --   • CREATE INDEX : wrapped in DO $$ … EXCEPTION WHEN
 --     duplicate_table THEN RAISE NOTICE
+--   • CREATE OR REPLACE VIEW : idempotent by definition
 --   • COMMENT ON   : outside DO blocks intentionally — COMMENT ON
 --     is idempotent (replaces the existing comment) and requires
 --     no guard.
@@ -108,7 +129,6 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "vendors_email_lower_idx" already exists, skipping';
 END $$;
 
--- COMMENT ON is idempotent and intentionally outside the DO block.
 COMMENT ON TABLE  app."vendors"                 IS 'Software vendors who issue and manage licenses on the platform. Root multi-tenant boundary: all RLS policies anchor to app."vendors"."id".';
 COMMENT ON COLUMN app."vendors"."id"            IS 'Surrogate primary key (uuidv7, time-ordered). Acts as the tenant identifier for all RLS policies.';
 COMMENT ON COLUMN app."vendors"."email"         IS 'Vendor login email. Globally unique across all tenants.';
@@ -124,6 +144,9 @@ COMMENT ON COLUMN app."vendors"."deleted_at"    IS 'Soft-delete marker. Non-NULL
 -- determined by the presence of an extension row (e.g.
 -- app."node_locked_license_data"). EXPIRED is never stored as a
 -- status — it is derived at query time from "expires_at".
+-- ⚠️  Do not write to this table directly from application code.
+-- Use app.v_license_node_locked (or the appropriate subtype
+-- view) so that audit logging fires correctly.
 -- ============================================================
 
 DO $$ BEGIN
@@ -149,13 +172,13 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table app."licenses" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  app."licenses"                       IS 'Licenses issued by vendors to customers. Root entity for activation, session management, and the audit trail. License type is determined by the presence of an extension row (e.g. app."node_locked_license_data").';
+COMMENT ON TABLE  app."licenses"                       IS 'Licenses issued by vendors to customers. Root entity for activation, session management, and the audit trail. ⚠️ Write through subtype views only (e.g. app.v_license_node_locked). Direct writes bypass audit triggers.';
 COMMENT ON COLUMN app."licenses"."id"                  IS 'Surrogate primary key (uuidv7, time-ordered).';
 COMMENT ON COLUMN app."licenses"."vendor_id"           IS 'Owning vendor (FK → app."vendors"). Enforces multi-tenancy; filtered by RLS policies.';
 COMMENT ON COLUMN app."licenses"."client_id"           IS 'Nullable placeholder for a future app."customers" table. Allows logical customer grouping without a FK constraint in the current schema version.';
 COMMENT ON COLUMN app."licenses"."license_status_code" IS 'Stored lifecycle status (FK → reference."license_statuses"). EXPIRED is intentionally absent — it is derived at query time from "expires_at" to avoid redundancy.';
 COMMENT ON COLUMN app."licenses"."expires_at"          IS 'Optional expiry timestamp (UTC). NULL means the license is perpetual. Expiry is checked at query time, not persisted as a status.';
-COMMENT ON COLUMN app."licenses"."max_grace_secs"      IS 'Seconds between heartbeats before a session transitions to ZOMBIE. License-level policy shared by all sessions on this license. Must be > 0; application must supply an explicit value.';
+COMMENT ON COLUMN app."licenses"."max_grace_secs"       IS 'Seconds between heartbeats before a session transitions to ZOMBIE. License-level policy shared by all sessions on this license. Must be > 0; application must supply an explicit value.';
 COMMENT ON COLUMN app."licenses"."metadata"            IS 'Arbitrary vendor-defined key-value metadata (e.g. product tier, feature flags). The platform does not interpret or validate this field.';
 COMMENT ON COLUMN app."licenses"."created_at"          IS 'License creation timestamp (UTC).';
 COMMENT ON COLUMN app."licenses"."updated_at"          IS 'Last update timestamp (UTC). Application must set this on every write.';
@@ -166,9 +189,10 @@ COMMENT ON COLUMN app."licenses"."deleted_at"          IS 'Soft-delete marker. N
 -- ============================================================
 -- Extension table for the node-locked license subtype.
 -- Presence of a row signals the parent license is node-locked.
--- Future subtypes (e.g. floating, site) each get their own
--- extension table — no type discriminator column is needed on
--- app."licenses".
+-- Future subtypes each get their own extension table.
+-- ⚠️  Do not write to this table directly from application code.
+-- Use app.v_license_node_locked so that audit logging fires
+-- correctly and the base license row is always created first.
 -- ============================================================
 
 DO $$ BEGIN
@@ -186,7 +210,7 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table app."node_locked_license_data" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  app."node_locked_license_data"                           IS 'Extension table for the node-locked license subtype. Presence of a row indicates the parent license is node-locked. Future subtypes each get their own extension table; no type discriminator is needed on app."licenses".';
+COMMENT ON TABLE  app."node_locked_license_data"                           IS 'Extension table for the node-locked license subtype. Presence of a row indicates the parent license is node-locked. Future subtypes each get their own extension table; no type discriminator is needed on app."licenses". ⚠️ Write through app.v_license_node_locked only. Direct writes bypass audit triggers.';
 COMMENT ON COLUMN app."node_locked_license_data"."license_id"              IS 'FK to and PK of the parent license (app."licenses"). Enforces a strict 1:1 relationship. RESTRICT prevents parent deletion while this extension row exists.';
 COMMENT ON COLUMN app."node_locked_license_data"."license_key"             IS 'Cryptographically random activation key distributed to the customer. Globally unique across all licenses.';
 COMMENT ON COLUMN app."node_locked_license_data"."device_fingerprint_hash" IS 'SHA-256 hash of device identifiers (BIOS UUID + CPU serial + disk serial). Computed server-side. NULL until first activation; locked to the value stored in app."sessions"."device_fingerprint_hash" on the first successful heartbeat for this license.';
@@ -198,8 +222,7 @@ COMMENT ON COLUMN app."node_locked_license_data"."max_sessions"            IS 'M
 -- Created on license activation; mostly immutable thereafter.
 -- session_status_code and updated_at are updated on state
 -- transitions. Liveness is determined at query time by
--- querying MAX("heartbeat_at") in app."heartbeats" for the
--- given session_id — no hot-table updates on heartbeat events.
+-- querying MAX("heartbeat_at") in app."heartbeats".
 -- ============================================================
 
 DO $$ BEGIN
@@ -363,16 +386,10 @@ END $$;
 -- ------------------------------------------------------------
 -- Indexes on app."heartbeats"
 -- ------------------------------------------------------------
--- Indexes created on the partition parent are automatically
--- propagated to all existing and future child partitions
--- (PostgreSQL 11+), including heartbeats_default.
---
--- These two indexes are exceptions to the deferred index policy
--- and are required from day one:
---   heartbeats_session_id_idx    — primary FK access pattern on
---     every heartbeat validation query.
---   heartbeats_heartbeat_at_idx  — BRIN index required by the
---     time-range liveness query strategy.
+-- Indexes on the parent are automatically propagated to all
+-- existing and future child partitions (PostgreSQL 11+).
+-- These two are required from day one — see INDEX STRATEGY
+-- in the file header.
 -- ------------------------------------------------------------
 
 DO $$ BEGIN
@@ -388,5 +405,82 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "heartbeats_heartbeat_at_idx" already exists, skipping';
 END $$;
+
+-- ============================================================
+-- app.v_license_node_locked
+-- ============================================================
+-- Mandatory write interface for node-locked licenses.
+-- An INNER JOIN is used deliberately: this view represents
+-- only fully-formed node-locked licenses where both the base
+-- license row and the extension row exist. Other license
+-- subtypes (floating, site, etc.) have their own views with
+-- their own extension tables. Using INNER JOIN prevents a
+-- license from appearing in multiple subtype views
+-- simultaneously.
+--
+-- ⚠️  All application INSERT/UPDATE/DELETE on node-locked
+-- licenses must target this view. The INSTEAD OF trigger
+-- (defined in 07_audit_triggers.sql) routes DML to the base
+-- tables and emits unified audit entries covering both tables
+-- atomically.
+--
+-- app_writer and app_deleter have INSERT/UPDATE/DELETE granted
+-- on this view below. They have no direct write access to
+-- app."licenses" or app."node_locked_license_data".
+--
+-- On INSERT: both app."licenses" and
+--   app."node_locked_license_data" rows are created by the
+--   trigger. The base license row is inserted first to satisfy
+--   the FK constraint.
+-- On DELETE: the extension row is deleted first, then the
+--   base license row.
+-- On UPDATE: each table is updated independently; the trigger
+--   sees OLD and NEW for all columns simultaneously enabling
+--   a unified diff.
+--
+-- Future license subtype pattern:
+--   CREATE OR REPLACE VIEW app.v_license_<subtype> AS
+--     SELECT l.*, ext.*
+--     FROM app."licenses" l
+--     INNER JOIN app."<subtype>_license_data" ext
+--       ON ext.license_id = l.id;
+--   Then add an INSTEAD OF trigger in 07_audit_triggers.sql.
+-- ============================================================
+
+CREATE OR REPLACE VIEW app.v_license_node_locked AS
+    SELECT
+        -- Base license columns
+        app."licenses"."id",
+        app."licenses"."vendor_id",
+        app."licenses"."client_id",
+        app."licenses"."license_status_code",
+        app."licenses"."expires_at",
+        app."licenses"."max_grace_secs",
+        app."licenses"."metadata",
+        app."licenses"."created_at",
+        app."licenses"."updated_at",
+        app."licenses"."deleted_at",
+        -- Node-locked extension columns
+        app."node_locked_license_data"."license_key",
+        app."node_locked_license_data"."device_fingerprint_hash",
+        app."node_locked_license_data"."max_sessions"
+    FROM app."licenses"
+    JOIN app."node_locked_license_data"
+        ON app."node_locked_license_data"."license_id" = app."licenses"."id";
+
+COMMENT ON VIEW app.v_license_node_locked IS
+    'Write interface for node-locked licenses. INNER JOIN ensures '
+    'only fully-formed node-locked licenses (base + extension row) '
+    'are visible. All application writes must target this view; '
+    'the INSTEAD OF trigger in 07_audit_triggers.sql routes DML '
+    'to the base tables and emits unified audit entries. '
+    'Direct writes to app."licenses" or app."node_locked_license_data" '
+    'bypass audit logging and are restricted to app_owner only.';
+
+-- Grant write privileges on the view to application roles.
+-- These roles have no direct write access to the base tables
+-- (revoked in 01_roles.sql).
+GRANT INSERT, UPDATE, DELETE ON app.v_license_node_locked TO app_writer;
+GRANT DELETE                 ON app.v_license_node_locked TO app_deleter;
 
 COMMIT;
