@@ -2,6 +2,7 @@ name: SonarCloud
 
 permissions:
   contents: read
+  actions: read
 
 on:
   workflow_run:
@@ -16,8 +17,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          repository: ${{ github.event.workflow_run.head_repository.full_name }}
-          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
 
       - name: Download coverage artifact
