@@ -11,6 +11,7 @@ retries.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import secrets
@@ -188,8 +189,12 @@ def generate_license_keys_batch(
         )
         combined_keys.add(generated.key)
         results.append(generated)
+        fingerprint = hashlib.sha256(generated.key.encode()).hexdigest()[:8]
         logger.debug(
-            "Batch key %d/%d generated: %s", i + 1, count, generated.key
+            "Batch key %d/%d generated (fingerprint=%s)",
+            i + 1,
+            count,
+            fingerprint,
         )
 
     return results

@@ -27,6 +27,24 @@ SET LOCAL ROLE app_owner;
 -- -------------------------------------------------------
 -- 1. Widen license_key to VARCHAR(24)
 -- -------------------------------------------------------
+
+-- Preflight: abort if any existing key exceeds the new limit.
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM app."node_locked_license_data"
+         WHERE length("license_key") > 24
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot narrow license_key to VARCHAR(24): '
+            'rows with length > 24 exist in '
+            'app."node_locked_license_data". '
+            'Inspect with: SELECT "license_id", "license_key" '
+            'FROM app."node_locked_license_data" '
+            'WHERE length("license_key") > 24;';
+    END IF;
+END $$;
+
 ALTER TABLE app."node_locked_license_data"
     ALTER COLUMN "license_key" TYPE VARCHAR(24);
 
