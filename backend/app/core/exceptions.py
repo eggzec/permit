@@ -157,3 +157,16 @@ class LicenseExpiredException(APIException):
             message=message,
             http_status=status.HTTP_409_CONFLICT,
         )
+
+
+class LicenseKeyGenerationError(APIException):
+    """License key generation failed after exhausting retries."""
+
+    def __init__(
+        self, message: str = "Failed to generate a unique license key"
+    ) -> None:
+        super().__init__(
+            error_code=ErrorCode.LICENSE_KEY_GENERATION_ERROR,
+            message=message,
+            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )

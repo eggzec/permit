@@ -17,6 +17,7 @@ from app.core.exceptions import (
     BusinessLogicException,
     ConflictException,
     LicenseExpiredException,
+    LicenseKeyGenerationError,
     LicenseNotFoundException,
     LicenseRevokedException,
     NotFoundException,
@@ -89,6 +90,11 @@ from app.schemas.response import ErrorCode
             LicenseExpiredException,
             ErrorCode.LICENSE_EXPIRED,
             id="license_expired_exception",
+        ),
+        pytest.param(
+            LicenseKeyGenerationError,
+            ErrorCode.LICENSE_KEY_GENERATION_ERROR,
+            id="license_key_generation_error",
         ),
     ],
 )
@@ -164,6 +170,11 @@ def test_exception_has_correct_error_code(exception_class, expected_code):
             LicenseExpiredException,
             status.HTTP_409_CONFLICT,
             id="license_expired_exception",
+        ),
+        pytest.param(
+            LicenseKeyGenerationError,
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            id="license_key_generation_error",
         ),
     ],
 )
@@ -304,6 +315,9 @@ def test_exception_stores_custom_details(exception_class, message, details):
         ),
         pytest.param(LicenseRevokedException, id="license_revoked_exception"),
         pytest.param(LicenseExpiredException, id="license_expired_exception"),
+        pytest.param(
+            LicenseKeyGenerationError, id="license_key_generation_error"
+        ),
     ],
 )
 def test_simple_exception_accepts_custom_message(exception_class):
@@ -356,6 +370,9 @@ def test_parameterized_exception_accepts_custom_message(exception_class):
         ),
         pytest.param(LicenseRevokedException, id="license_revoked_exception"),
         pytest.param(LicenseExpiredException, id="license_expired_exception"),
+        pytest.param(
+            LicenseKeyGenerationError, id="license_key_generation_error"
+        ),
     ],
 )
 def test_exception_default_message_has_reasonable_length(exception_class):
@@ -401,6 +418,9 @@ def test_api_exception_is_subclass_of_exception():
         ),
         pytest.param(LicenseRevokedException, id="license_revoked_exception"),
         pytest.param(LicenseExpiredException, id="license_expired_exception"),
+        pytest.param(
+            LicenseKeyGenerationError, id="license_key_generation_error"
+        ),
     ],
 )
 def test_concrete_exception_is_subclass_of_api_exception(exception_class):
