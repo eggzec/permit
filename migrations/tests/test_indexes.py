@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import psycopg
 import psycopg.rows
 import pytest
 
@@ -8,7 +7,7 @@ pytestmark = [pytest.mark.indexes, pytest.mark.app, pytest.mark.audit]
 
 
 @pytest.mark.parametrize(
-    "schema,table,index_name",
+    ("schema", "table", "index_name"),
     [
         pytest.param(
             "app", "vendors", "vendors_email_lower_idx", id="vendors_email_lower"

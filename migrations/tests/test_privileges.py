@@ -17,7 +17,7 @@ pytestmark = [
 
 
 @pytest.mark.parametrize(
-    "role,sql_stmt,params",
+    ("role", "sql_stmt", "params"),
     [
         pytest.param(
             "app_reader_rls",
@@ -81,7 +81,7 @@ def test_app_deleter_can_delete(superconn):
 
 
 @pytest.mark.parametrize(
-    "role,sql_stmt,params",
+    ("role", "sql_stmt", "params"),
     [
         pytest.param(
             "app_reader_rls",

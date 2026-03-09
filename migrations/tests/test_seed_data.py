@@ -7,7 +7,7 @@ pytestmark = [pytest.mark.seed_data, pytest.mark.reference]
 
 
 @pytest.mark.parametrize(
-    "table_name,expected_codes",
+    ("table_name", "expected_codes"),
     [
         pytest.param(
             "license_statuses",
@@ -49,7 +49,7 @@ def test_error_codes_seed_count(superconn):
 
 
 @pytest.mark.parametrize(
-    "table_name,expected_count",
+    ("table_name", "expected_count"),
     [
         pytest.param("error_codes", 12, id="error_codes"),
         pytest.param("actions", 15, id="actions"),

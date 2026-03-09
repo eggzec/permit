@@ -16,3 +16,6 @@ dist/
 *.log
 coverage.xml
 .coverage.*
+.fastembed_cache
+.database
+.amdb

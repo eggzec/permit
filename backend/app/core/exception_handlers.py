@@ -38,7 +38,7 @@ def api_exception_handler(request: Request, exc: APIException) -> JSONResponse:
             code=exc.error_code,
             message=exc.message,
             http_status=exc.http_status,
-            details=_build_error_details(exc.details),
+            details=build_error_details(exc.details),
             request_id=request_id,
         )
     )
@@ -64,7 +64,7 @@ def validation_exception_handler(
     details = []
     for error in exc.errors():
         field_path = ".".join(str(loc) for loc in error["loc"][1:])
-        field = field_path if field_path else None
+        field = field_path or None
         details.append({"field": field, "message": error["msg"]})
 
     logger.warning(
@@ -84,7 +84,7 @@ def validation_exception_handler(
             code=ErrorCode.VALIDATION_FAILED,
             message="Validation error",
             http_status=http_422_unprocessable_content,
-            details=_build_error_details(details),
+            details=build_error_details(details),
             request_id=request_id,
         )
     )
@@ -105,7 +105,7 @@ def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     request_id = getattr(request.state, "request_id", str(uuid.uuid4()))
 
     # Log the full traceback server-side
-    logger.exception(
+    logger.exception(  # noqa: LOG004 - this will be used by the exceptions
         "Unexpected error: %s", exc, extra={"request_id": request_id}
     )
 
@@ -127,7 +127,7 @@ def general_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
-def _build_error_details(
+def build_error_details(
     details: list[dict | ErrorDetail] | dict | ErrorDetail | None,
 ) -> list[ErrorDetail]:
     """

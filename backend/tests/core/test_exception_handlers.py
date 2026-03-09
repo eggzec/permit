@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app.core.exception_handlers import (
     api_exception_handler,
+    build_error_details,
     general_exception_handler,
     validation_exception_handler,
 )
@@ -34,6 +35,7 @@ from app.core.exceptions import (
     ServiceUnavailableException,
     ValidationException,
 )
+from app.schemas.response import ErrorDetail
 
 
 # Pre-compiled UUID v4 pattern reused across request-id assertions
@@ -42,9 +44,124 @@ _UUID_V4_RE = re.compile(
 )
 
 
+@pytest.mark.unit
+def test_build_error_details_none_returns_empty_list():
+    """
+    Verifies that `app.core.exception_handlers._build_error_details` returns an
+    empty list when given `None`. This matters because error handlers normalize
+    optional detail payloads into a consistent response shape.
+
+    Covers:
+        - `app.core.exception_handlers._build_error_details`
+
+    Rationale:
+        This is a direct helper-unit test with no fixtures because the normalization rule is pure and deterministic.
+
+    Fixtures:
+        None.
+    """
+    details = build_error_details(None)
+    assert details == [], "Expected no details when input is None"
+
+
+@pytest.mark.unit
+def test_build_error_details_accepts_error_detail_instance():
+    """
+    Verifies that `app.core.exception_handlers._build_error_details` preserves
+    an existing `ErrorDetail` instance. This matters because handlers should
+    not mutate already-normalized detail objects.
+
+    Covers:
+        - `app.core.exception_handlers._build_error_details`
+
+    Rationale:
+        The test uses a real `ErrorDetail` instance because the helper contract is about normalization, not copying.
+
+    Fixtures:
+        None.
+    """
+    item = ErrorDetail(field="email", message="Invalid email")
+
+    details = build_error_details(item)
+    assert len(details) == 1, "Expected exactly one normalized detail entry"
+    assert details[0] is item, (
+        "Expected ErrorDetail instance input to be preserved without copying"
+    )
+
+
+@pytest.mark.unit
+def test_build_error_details_dict_uses_fallback_message_when_missing():
+    """
+    Verifies that `app.core.exception_handlers._build_error_details` supplies
+    the fallback message when a detail dict omits `message`. This matters
+    because API error details must always carry a message field after
+    normalization.
+
+    Covers:
+        - `app.core.exception_handlers._build_error_details`
+
+    Rationale:
+        A single dict input is enough because the contract under test is the fallback message behavior.
+
+    Fixtures:
+        None.
+    """
+    details = build_error_details({"field": "password"})
+    assert len(details) == 1, "Expected exactly one normalized detail entry"
+    assert details[0].field == "password", (
+        "Expected dict field to be mapped to ErrorDetail.field"
+    )
+    assert details[0].message == "Unknown error", (
+        "Expected missing/empty dict message to use 'Unknown error' fallback"
+    )
+
+
+@pytest.mark.unit
+def test_build_error_details_non_dict_item_is_stringified():
+    """
+    Verifies that `app.core.exception_handlers._build_error_details` stringifies
+    non-dict inputs into a detail message. This matters because handlers may
+    receive arbitrary exception detail items that still need to be serialized
+    into the response contract.
+
+    Covers:
+        - `app.core.exception_handlers._build_error_details`
+
+    Rationale:
+        The runtime-error input documents the behavior for non-dict, non-`ErrorDetail` detail items.
+
+    Fixtures:
+        None.
+    """
+    details = build_error_details(RuntimeError("boom"))
+    assert len(details) == 1, "Expected exactly one normalized detail entry"
+    assert details[0].field is None, (
+        "Expected non-dict inputs to map to ErrorDetail with field=None"
+    )
+    assert details[0].message == "boom", (
+        "Expected non-dict inputs to be stringified into detail message"
+    )
+
+
 @pytest.fixture(scope="module")
 def error_contract_app():
-    """FastAPI app wired with all exception handlers."""
+    """
+    Provides a FastAPI app wired with the project exception handlers and test-only endpoints that trigger each handler path.
+
+    Scope: module — the app wiring is expensive enough to share within the module and tests do not mutate the router structure.
+
+    Provides:
+        A `FastAPI` instance configured with API, validation, and general exception handlers plus endpoints that raise representative exceptions.
+
+    Dependencies:
+        None.
+
+    Teardown:
+        None.
+
+    Note:
+        The fixture exists solely to exercise the real response envelope produced by the installed handlers.
+    """
     app = FastAPI()
 
     app.add_exception_handler(APIException, api_exception_handler)
@@ -138,7 +255,7 @@ def error_contract_app():
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "endpoint,expected_code,expected_status",
+    ("endpoint", "expected_code", "expected_status"),
     [
         pytest.param(
             "/validation",
@@ -216,7 +333,41 @@ def error_contract_app():
 def test_error_status_code_and_code_match(
     error_contract_app, endpoint, expected_code, expected_status
 ):
-    """HTTP status and error code must match for every type."""
+    """
+    Verifies that each registered exception path returns the expected HTTP
+    status code and error code pair. This matters because clients and
+    observability tooling depend on the wire status and structured error code
+    staying aligned.
+
+    Covers:
+        - `app.core.exception_handlers.api_exception_handler`
+        - `app.core.exception_handlers.general_exception_handler`
+        - `app.core.exception_handlers.validation_exception_handler`
+
+    Rationale:
+        The test drives the app through real endpoints because the contract under test is the final HTTP response envelope for each handler path.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
+
+    Parametrize:
+        endpoint: The route that triggers the handler under test.
+        expected_code: The error code expected in the response body.
+        expected_status: The HTTP status expected on the response.
+        Cases:
+            - <id="validation_failed"> — validation exception path.
+            - <id="auth_invalid"> — invalid-authentication path.
+            - <id="auth_expired"> — expired-authentication path.
+            - <id="forbidden"> — authorization failure path.
+            - <id="resource_not_found"> — generic not-found path.
+            - <id="license_not_found"> — license-not-found path.
+            - <id="resource_conflict"> — generic conflict path.
+            - <id="license_revoked"> — license-revoked path.
+            - <id="license_expired"> — license-expired path.
+            - <id="business_logic_error"> — business-logic error path.
+            - <id="service_unavailable"> — service-unavailable path.
+            - <id="internal_server_error"> — uncaught exception path.
+    """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get(endpoint)
 
@@ -247,7 +398,20 @@ def test_error_status_code_and_code_match(
 
 @pytest.mark.integration
 def test_error_details_structure(error_contract_app):
-    """Details list must contain exact field+message pairs."""
+    """
+    Verifies that validation-style details are serialized with the expected
+    field and message pairs. This matters because API clients rely on the
+    `details` list to display precise validation feedback.
+
+    Covers:
+        - `app.core.exception_handlers.api_exception_handler`
+
+    Rationale:
+        The test exercises the real `/validation` endpoint so the final response envelope is asserted end to end.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
+    """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get("/validation")
 
@@ -281,7 +445,20 @@ def test_error_details_structure(error_contract_app):
 
 @pytest.mark.integration
 def test_error_details_default_empty(error_contract_app):
-    """Exceptions without details must yield empty details."""
+    """
+    Verifies that exception responses without explicit details still serialize
+    `details` as an empty list. This matters because the API error contract
+    should stay shape-stable even when no field-level detail exists.
+
+    Covers:
+        - `app.core.exception_handlers.api_exception_handler`
+
+    Rationale:
+        The test uses a real auth error endpoint because the observable response shape is the contract that matters.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
+    """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get("/auth-invalid")
 
@@ -302,10 +479,20 @@ def test_error_details_default_empty(error_contract_app):
 
 @pytest.mark.integration
 def test_validation_handler_nested_field_path(error_contract_app):
-    """validation_exception_handler must join nested loc segments with dots.
+    """
+    Verifies that `app.core.exception_handlers.validation_exception_handler`
+    joins nested validation locations with dots. This matters because clients
+    need a stable field path such as `address.street` to map nested validation
+    errors back to inputs.
 
-    Sending {"address": {}} triggers loc=["body", "address", "street"];
-    the handler must produce field="address.street" via its dot-join logic.
+    Covers:
+        - `app.core.exception_handlers.validation_exception_handler`
+
+    Rationale:
+        The nested-body endpoint is exercised through `TestClient` because the contract under test is the emitted validation detail field path.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
     """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-nested", json={"address": {}})
@@ -327,12 +514,19 @@ def test_validation_handler_nested_field_path(error_contract_app):
 def test_validation_handler_body_level_error_sets_field_to_none(
     error_contract_app,
 ):
-    """Body-level error (loc with one element after slicing)
-    must produce field=None in the detail.
+    """
+    Verifies that `app.core.exception_handlers.validation_exception_handler`
+    emits `field=None` for body-level validation failures. This matters because
+    some request errors apply to the whole body rather than a named field.
 
-    Sending an integer body against an object-typed endpoint
-    triggers loc=["body"], making loc[1:] empty and
-    field_path="", so field=None.
+    Covers:
+        - `app.core.exception_handlers.validation_exception_handler`
+
+    Rationale:
+        The test posts a scalar to an object endpoint so the handler receives a body-level location and must normalize it into a `None` field.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
     """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-body", json=5)
@@ -361,7 +555,7 @@ def test_validation_handler_body_level_error_sets_field_to_none(
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "endpoint,method,json_body,raise_exceptions",
+    ("endpoint", "method", "json_body", "raise_exceptions"),
     [
         pytest.param(
             "/auth-invalid", "get", None, True, id="api_exception_handler"
@@ -381,7 +575,33 @@ def test_validation_handler_body_level_error_sets_field_to_none(
 def test_request_id_header_matches_body_and_is_uuid_v4(
     error_contract_app, endpoint, method, json_body, raise_exceptions
 ):
-    """X-Request-ID header must match body and be UUID v4."""
+    """
+    Verifies that every exception-handler response echoes the same request id in
+    the header and body and that the value is UUIDv4-shaped. This matters
+    because traceability depends on a single correlation id surviving across
+    both response surfaces.
+
+    Covers:
+        - `app.core.exception_handlers.api_exception_handler`
+        - `app.core.exception_handlers.general_exception_handler`
+        - `app.core.exception_handlers.validation_exception_handler`
+
+    Rationale:
+        The parametrized endpoints cover one path for each handler family so the request-id contract is checked across the full error stack.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
+
+    Parametrize:
+        endpoint: Route that triggers the handler under test.
+        method: HTTP verb used to reach that route.
+        json_body: Optional request JSON body for the route.
+        raise_exceptions: Whether the `TestClient` should re-raise server exceptions.
+        Cases:
+            - <id="api_exception_handler"> — exercises an APIException-derived handler path.
+            - <id="validation_exception_handler"> — exercises a request-validation handler path.
+            - <id="general_exception_handler"> — exercises the uncaught-exception handler path.
+    """
     client = TestClient(
         error_contract_app, raise_server_exceptions=raise_exceptions
     )
@@ -408,7 +628,20 @@ def test_request_id_header_matches_body_and_is_uuid_v4(
 
 @pytest.mark.integration
 def test_request_id_uniqueness_across_requests(error_contract_app):
-    """Repeated requests must each get a distinct request_id."""
+    """
+    Verifies that separate error responses receive distinct request ids across
+    repeated requests. This matters because a reused request id would break
+    per-request tracing and log correlation.
+
+    Covers:
+        - request-id generation behavior exercised through the exception handlers
+
+    Rationale:
+        Repeating the same failing request keeps the route constant while checking the per-request uniqueness contract.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
+    """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
 
     ids = {
@@ -428,62 +661,21 @@ def test_request_id_uniqueness_across_requests(error_contract_app):
 
 
 @pytest.mark.integration
-def test_api_exception_handler_returns_correct_structure(error_contract_app):
-    """api_exception_handler must return all required top-level error fields."""
-    client = TestClient(error_contract_app, raise_server_exceptions=False)
-    response = client.get("/auth-invalid")
-
-    assert response.status_code == status.HTTP_401_UNAUTHORIZED, (
-        f"Expected status 401 for APIException, got {response.status_code}"
-    )
-    error = response.json()["error"]
-    for field in ("code", "message", "http_status", "details", "request_id"):
-        assert field in error, (
-            f"Missing field '{field}' in error response, got: {error.keys()}"
-        )
-
-
-@pytest.mark.integration
-def test_validation_exception_handler_returns_correct_structure(
-    error_contract_app,
-):
-    """validation_exception_handler must return
-    VALIDATION_FAILED with populated details.
-    """
-    client = TestClient(error_contract_app, raise_server_exceptions=False)
-    response = client.post("/validate-body", json={"invalid": "data"})
-
-    assert response.status_code == getattr(
-        status, "HTTP_422_UNPROCESSABLE_CONTENT", 422
-    ), f"Expected status 422 for validation error, got {response.status_code}"
-    error = response.json()["error"]
-    assert error["code"] == "VALIDATION_FAILED", (
-        f"Expected code 'VALIDATION_FAILED', got '{error['code']}'"
-    )
-    assert error["http_status"] == getattr(
-        status, "HTTP_422_UNPROCESSABLE_CONTENT", 422
-    ), f"Expected http_status 422, got {error['http_status']}"
-    assert len(error["details"]) > 0, (
-        "Expected at least one validation detail, got empty list"
-    )
-
-    for detail in error["details"]:
-        assert "field" in detail, (
-            f"Expected 'field' key in detail, got keys: {detail.keys()}"
-        )
-        assert "message" in detail, (
-            f"Expected 'message' key in detail, got keys: {detail.keys()}"
-        )
-        assert isinstance(detail["message"], str), (
-            "Expected detail message to be string,"
-            f" got {type(detail['message'])}"
-        )
-
-
-@pytest.mark.integration
 def test_general_exception_handler_returns_sanitized_500(error_contract_app):
-    """general_exception_handler must return 500
-    with a sanitized message, never internal details.
+    """
+    Verifies that `app.core.exception_handlers.general_exception_handler`
+    returns a sanitized 500 response instead of leaking internal exception
+    details. This matters because unexpected server errors should preserve the
+    API contract without exposing internals to clients.
+
+    Covers:
+        - `app.core.exception_handlers.general_exception_handler`
+
+    Rationale:
+        The test triggers a real runtime error endpoint so the final error envelope is asserted exactly as a client would observe it.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
     """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get("/general-error")
@@ -510,8 +702,20 @@ def test_general_exception_handler_returns_sanitized_500(error_contract_app):
 
 @pytest.mark.integration
 def test_validation_error_message_and_details(error_contract_app):
-    """validation_exception_handler must return the
-    standard message with non-empty detail messages.
+    """
+    Verifies that `app.core.exception_handlers.validation_exception_handler`
+    emits the standard validation message and non-empty detail messages. This
+    matters because clients depend on a stable top-level validation message and
+    usable detail entries.
+
+    Covers:
+        - `app.core.exception_handlers.validation_exception_handler`
+
+    Rationale:
+        The test exercises a real validation failure so the asserted messages come from the actual response contract.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
     """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.post("/validate-body", json={"invalid": "data"})
@@ -535,7 +739,7 @@ def test_validation_error_message_and_details(error_contract_app):
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    "endpoint,expected_message",
+    ("endpoint", "expected_message"),
     [
         pytest.param("/auth-invalid", "Invalid credentials", id="auth_invalid"),
         pytest.param("/auth-expired", "Token has expired", id="auth_expired"),
@@ -567,8 +771,36 @@ def test_validation_error_message_and_details(error_contract_app):
 def test_raised_error_messages_roundtrip_correctly(
     error_contract_app, endpoint, expected_message
 ):
-    """The message passed to the constructor must
-    appear in the response.
+    """
+    Verifies that exception messages raised by the test endpoints appear
+    unchanged in the serialized API error response where that is the intended
+    contract. This matters because domain-specific error messages are part of
+    the client-visible failure contract for handled exceptions.
+
+    Covers:
+        - `app.core.exception_handlers.api_exception_handler`
+
+    Rationale:
+        The test drives each endpoint through `TestClient` because the contract under test is the final response body seen by clients.
+
+    Fixtures:
+        error_contract_app: FastAPI app configured with the project exception handlers and trigger endpoints.
+
+    Parametrize:
+        endpoint: Route that raises the exception under test.
+        expected_message: The message expected in the serialized error body.
+        Cases:
+            - <id="auth_invalid"> — invalid-authentication message.
+            - <id="auth_expired"> — expired-authentication message.
+            - <id="forbidden"> — authorization message.
+            - <id="resource_not_found"> — generic not-found message.
+            - <id="resource_conflict"> — generic conflict message.
+            - <id="validation_error"> — validation exception message.
+            - <id="business_logic_error"> — business-logic message.
+            - <id="service_unavailable"> — service-unavailable message.
+            - <id="license_not_found"> — license-not-found message.
+            - <id="license_revoked"> — license-revoked message.
+            - <id="license_expired"> — license-expired message.
     """
     client = TestClient(error_contract_app, raise_server_exceptions=False)
     response = client.get(endpoint)

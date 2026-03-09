@@ -2,12 +2,12 @@ name: Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
   schedule:
-    - cron: "0 0 * * 0"  # Runs every Sunday at midnight UTC
+    - cron: "0 0 * * 0" # Runs every Sunday at midnight UTC
 
   workflow_dispatch:
 
@@ -34,6 +34,8 @@ jobs:
   test_backend:
     needs: fetch-python-versions
     runs-on: ubuntu-latest
+    env:
+      UV_NO_DEV: true
 
     permissions:
       id-token: write
@@ -52,7 +54,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group test
 
       - name: Unit tests
         working-directory: backend

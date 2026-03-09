@@ -5,25 +5,28 @@ description = ""
 requires-python = ">=3.10,<4.0"
 dependencies = [
     "fastapi[standard]<1.0.0,>=0.114.2",
-    "python-multipart<1.0.0,>=0.0.7",
     "tenacity<9.0.0,>=8.2.3",
-    "pydantic>2.0",
     "httpx<1.0.0,>=0.25.1",
-    "psycopg[binary]<4.0.0,>=3.1.13",
-    "pydantic-settings<3.0.0,>=2.2.1",
+    "psycopg[binary,pool]<4.0.0,>=3.1.13",
     "pwdlib[argon2,bcrypt]>=0.3.0",
-    "psycopg-pool>=3.3.0,<4.0.0",
     "pyjwt>=2.11.0,<3.0.0",
+    "cryptography>=44.0.0",
+    "base58>=2.1.1",
+    "uuid6>=2025.0.1",
 ]
 
 [dependency-groups]
 dev = [
-    "pytest<8.0.0,>=7.4.3",
-    "testcontainers[postgres]>=4.0.0",
-    "ruff<1.0.0,>=0.2.2",
+    "ruff>=0.2.2,<1.0.0",
     "prek>=0.2.24,<1.0.0",
-    "coverage<8.0.0,>=7.4.3",
-    "pytest-xdist>=3.5.0,<4.0.0",
+    { include-group = "test" },
+]
+test = [
+    "faker>=40.11.0",
+    "pytest>=7.4.4",
+    "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",
+    "testcontainers[postgres]>=4.14.1",
 ]
 
 [build-system]
@@ -49,28 +52,38 @@ isort.lines-after-imports = 2
 isort.split-on-trailing-comma = false
 
 select = [
-    "ANN", # flake8-annotations (required strict type annotations for public functions)
-    "S",   # flake8-bandit (checks basic security issues in code)
-    "BLE", # flake8-blind-except (checks the except blocks that do not specify exception)
-    "FBT", # flake8-boolean-trap (ensure that boolean args can be used with kw only)
-    "E",   # pycodestyle errors (PEP 8 style guide violations)
-    "W",   # pycodestyle warnings (e.g., extra spaces, indentation issues)
-    "DOC", # pydoclint issues (e.g., extra or missing return, yield, warnings)
-    "A",   # flake8-builtins (check variable and function names to not shadow builtins)
-    "N",   # Naming convention checks (e.g., PEP 8 variable and function names)
-    "F",   # Pyflakes errors (e.g., unused imports, undefined variables)
-    "I",   # isort (Ensures imports are sorted properly)
-    "B",   # flake8-bugbear (Detects likely bugs and bad practices)
-    "TID", # flake8-tidy-imports (Checks for banned or misplaced imports)
-    "UP",  # pyupgrade (Automatically updates old Python syntax)
-    "YTT", # flake8-2020 (Detects outdated Python 2/3 compatibility issues)
-    "FLY", # flynt (Converts old-style string formatting to f-strings)
-    "PIE", # flake8-pie
-    "PL",  # pylint
-    "RUF", # Ruff-specific rules (Additional optimizations and best practices)
+    "FAST",  # fastapi related rules
+    "ASYNC", # flake8-aysnc rules
+    "ANN",   # flake8-annotations (required strict type annotations for public functions)
+    "S",     # flake8-bandit (checks basic security issues in code)
+    "BLE",   # flake8-blind-except (checks the except blocks that do not specify exception)
+    "FBT",   # flake8-boolean-trap (ensure that boolean args can be used with kw only)
+    "E",     # pycodestyle errors (PEP 8 style guide violations)
+    "W",     # pycodestyle warnings (e.g., extra spaces, indentation issues)
+    "DOC",   # pydoclint issues (e.g., extra or missing return, yield, warnings)
+    "A",     # flake8-builtins (check variable and function names to not shadow builtins)
+    "N",     # Naming convention checks (e.g., PEP 8 variable and function names)
+    "F",     # Pyflakes errors (e.g., unused imports, undefined variables)
+    "I",     # isort (Ensures imports are sorted properly)
+    "B",     # flake8-bugbear (Detects likely bugs and bad practices)
+    "TID",   # flake8-tidy-imports (Checks for banned or misplaced imports)
+    "UP",    # pyupgrade (Automatically updates old Python syntax)
+    "YTT",   # flake8-2020 (Detects outdated Python 2/3 compatibility issues)
+    "FLY",   # flynt (Converts old-style string formatting to f-strings)
+    "PIE",   # flake8-pie
+    "PL",    # pylint
+    "C4",    # flake8-comprehensions for simplification
+    "LOG",   # flake8-logging best practices
+    "G",     # flake8-logging-format
+    "PT",    # flake8-pytest-style
+    "FURB",  # refurb rules
+    "RUF",   # Ruff-specific rules (Additional optimizations and best practices)
 ]
 
-ignore = []
+ignore = [
+    "E501", # line too long (for docstrings)
+    "DOC202", # pydoclint (docstring extraneous returns)
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = [

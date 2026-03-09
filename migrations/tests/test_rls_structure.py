@@ -27,7 +27,7 @@ def test_rls_enabled_on_tenant_table(superconn, table):
 
 
 @pytest.mark.parametrize(
-    "table,policy",
+    ("table", "policy"),
     [
         pytest.param("licenses", "licenses_select_own", id="licenses_select"),
         pytest.param("licenses", "licenses_insert_own", id="licenses_insert"),
@@ -93,7 +93,7 @@ def test_rls_enabled_on_audit_table(superconn, table):
 
 
 @pytest.mark.parametrize(
-    "table,policy",
+    ("table", "policy"),
     [
         pytest.param("audit_logs", "audit_logs_insert_writer", id="audit_logs_insert"),
         pytest.param(
@@ -226,7 +226,7 @@ def test_audit_immutability_function_owned_by_audit_owner(superconn):
 
 
 @pytest.mark.parametrize(
-    "function_name,expected_owner",
+    ("function_name", "expected_owner"),
     [
         pytest.param(
             "_insert_log", "audit_owner", id="insert_log_owned_by_audit_owner"
