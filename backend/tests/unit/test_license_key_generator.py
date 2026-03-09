@@ -140,6 +140,17 @@ class TestCollisionRetryExhaustion:
             result = generate_license_key(existing_keys=existing)
             assert result.key == unique_key
 
+    def test_invalid_format_triggers_retry(self):
+        invalid_key = "aaaa-bbbb-cccc-dddd"
+        valid_key = "AAAA-BBBB-CCCC-DDDD"
+
+        with patch(
+            "app.services.license_key_generator._generate_raw_key",
+            side_effect=[invalid_key, valid_key],
+        ):
+            result = generate_license_key()
+            assert result.key == valid_key
+
 
 @pytest.mark.unit
 class TestBatchMetadata:
