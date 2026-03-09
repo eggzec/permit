@@ -66,7 +66,7 @@ BEGIN;
 -- Switch to the schema owner so that default privileges defined
 -- in 01_roles.sql for reference_owner apply to all objects
 -- created in this transaction.
-SET LOCAL ROLE reference_owner;
+SET LOCAL ROLE "reference_owner";
 
 -- ============================================================
 -- reference."license_statuses"
@@ -78,7 +78,7 @@ SET LOCAL ROLE reference_owner;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE reference."license_statuses" (
+    CREATE TABLE "reference"."license_statuses" (
         "code"        TEXT PRIMARY KEY,
         "description" TEXT NOT NULL
     );
@@ -87,11 +87,11 @@ EXCEPTION WHEN duplicate_table THEN
 END $$;
 
 -- COMMENT ON is idempotent and intentionally outside the DO block.
-COMMENT ON TABLE  reference."license_statuses"               IS 'Lookup table for license lifecycle states. EXPIRED is intentionally omitted: expiry is a derived state computed at query time from app."licenses"."expires_at". Storing it redundantly would risk inconsistency.';
-COMMENT ON COLUMN reference."license_statuses"."code"        IS 'Machine-readable status code (PK). Self-documents FK references in app."licenses". Examples: ACTIVE, REVOKED.';
-COMMENT ON COLUMN reference."license_statuses"."description" IS 'Human-readable explanation of this license state for developers and operators.';
+COMMENT ON TABLE  "reference"."license_statuses"               IS 'Lookup table for license lifecycle states. EXPIRED is intentionally omitted: expiry is a derived state computed at query time from "app"."licenses"."expires_at". Storing it redundantly would risk inconsistency.';
+COMMENT ON COLUMN "reference"."license_statuses"."code"        IS 'Machine-readable status code (PK). Self-documents FK references in "app"."licenses". Examples: ACTIVE, REVOKED.';
+COMMENT ON COLUMN "reference"."license_statuses"."description" IS 'Human-readable explanation of this license state for developers and operators.';
 
-INSERT INTO reference."license_statuses" ("code", "description")
+INSERT INTO "reference"."license_statuses" ("code", "description")
 VALUES
     ('ACTIVE',  'License is valid and can be activated by a customer device.'),
     ('REVOKED', 'License was manually revoked by the vendor; no further activations or heartbeats are permitted.')
@@ -106,7 +106,7 @@ ON CONFLICT ("code") DO NOTHING;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE reference."session_statuses" (
+    CREATE TABLE "reference"."session_statuses" (
         "code"        TEXT PRIMARY KEY,
         "description" TEXT NOT NULL
     );
@@ -114,11 +114,11 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table reference."session_statuses" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  reference."session_statuses"               IS 'Lookup table for session lifecycle states. Derived states (grace period exceeded, license expired) are computed at query time, not stored.';
-COMMENT ON COLUMN reference."session_statuses"."code"        IS 'Machine-readable status code (PK). Values: ACTIVE, REVOKED, ZOMBIE, CLEANUP.';
-COMMENT ON COLUMN reference."session_statuses"."description" IS 'Human-readable explanation of this session state for developers and operators.';
+COMMENT ON TABLE  "reference"."session_statuses"               IS 'Lookup table for session lifecycle states. Derived states (grace period exceeded, license expired) are computed at query time, not stored.';
+COMMENT ON COLUMN "reference"."session_statuses"."code"        IS 'Machine-readable status code (PK). Values: ACTIVE, REVOKED, ZOMBIE, CLEANUP.';
+COMMENT ON COLUMN "reference"."session_statuses"."description" IS 'Human-readable explanation of this session state for developers and operators.';
 
-INSERT INTO reference."session_statuses" ("code", "description")
+INSERT INTO "reference"."session_statuses" ("code", "description")
 VALUES
     ('ACTIVE',  'Session is running and receiving heartbeats normally.'),
     ('REVOKED', 'Session was explicitly terminated by a vendor action or an automated system process.'),
@@ -134,7 +134,7 @@ ON CONFLICT ("code") DO NOTHING;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE reference."heartbeat_resp_statuses" (
+    CREATE TABLE "reference"."heartbeat_resp_statuses" (
         "code"        TEXT PRIMARY KEY,
         "description" TEXT NOT NULL
     );
@@ -142,11 +142,11 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table reference."heartbeat_resp_statuses" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  reference."heartbeat_resp_statuses"               IS 'Lookup table for heartbeat response codes returned by the server to the SDK. The server selects a code based on current license and session state; the SDK takes a mandatory action based on the code received.';
-COMMENT ON COLUMN reference."heartbeat_resp_statuses"."code"        IS 'Machine-readable response code (PK). Values: CONTINUE, REFRESH, REVOKED, EXPIRED, ERROR.';
-COMMENT ON COLUMN reference."heartbeat_resp_statuses"."description" IS 'Human-readable description of the response code and the SDK action it mandates.';
+COMMENT ON TABLE  "reference"."heartbeat_resp_statuses"               IS 'Lookup table for heartbeat response codes returned by the server to the SDK. The server selects a code based on current license and session state; the SDK takes a mandatory action based on the code received.';
+COMMENT ON COLUMN "reference"."heartbeat_resp_statuses"."code"        IS 'Machine-readable response code (PK). Values: CONTINUE, REFRESH, REVOKED, EXPIRED, ERROR.';
+COMMENT ON COLUMN "reference"."heartbeat_resp_statuses"."description" IS 'Human-readable description of the response code and the SDK action it mandates.';
 
-INSERT INTO reference."heartbeat_resp_statuses" ("code", "description")
+INSERT INTO "reference"."heartbeat_resp_statuses" ("code", "description")
 VALUES
     ('CONTINUE', 'License is valid and the session is healthy. SDK should continue normal protected operation with no state change.'),
     ('REFRESH',  'The vendor has modified the license configuration since the last heartbeat (e.g. expiry extended, max_grace_secs changed, metadata updated). SDK must re-fetch the current license state and apply it before continuing.'),
@@ -164,7 +164,7 @@ ON CONFLICT ("code") DO NOTHING;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE reference."error_codes" (
+    CREATE TABLE "reference"."error_codes" (
         "code"        TEXT PRIMARY KEY,
         "description" TEXT NOT NULL
     );
@@ -172,11 +172,11 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table reference."error_codes" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  reference."error_codes"               IS 'Canonical lookup table for business error codes used in API responses and SDK error handling. HTTP status code mapping is handled exclusively in application code and is decoupled from this table.';
-COMMENT ON COLUMN reference."error_codes"."code"        IS 'Machine-readable error code constant (PK). Referenced by API responses, SDK error handlers, and log entries.';
-COMMENT ON COLUMN reference."error_codes"."description" IS 'Human-readable explanation of the error condition for developers and operators.';
+COMMENT ON TABLE  "reference"."error_codes"               IS 'Canonical lookup table for business error codes used in API responses and SDK error handling. HTTP status code mapping is handled exclusively in application code and is decoupled from this table.';
+COMMENT ON COLUMN "reference"."error_codes"."code"        IS 'Machine-readable error code constant (PK). Referenced by API responses, SDK error handlers, and log entries.';
+COMMENT ON COLUMN "reference"."error_codes"."description" IS 'Human-readable explanation of the error condition for developers and operators.';
 
-INSERT INTO reference."error_codes" ("code", "description")
+INSERT INTO "reference"."error_codes" ("code", "description")
 VALUES
     ('INVALID_CREDENTIALS',   'Authentication failed due to incorrect email or password.'),
     ('INVALID_TOKEN',         'JWT access token is missing, malformed, or has expired.'),
@@ -212,7 +212,7 @@ ON CONFLICT ("code") DO NOTHING;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE reference."actions" (
+    CREATE TABLE "reference"."actions" (
         "code"        TEXT PRIMARY KEY,
         "description" TEXT NOT NULL
     );
@@ -220,11 +220,11 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table reference."actions" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  reference."actions"               IS 'Lookup table for auditable action verbs recorded in audit."audit_logs". Codes are broadly resource-agnostic; the affected resource is captured in audit junction tables (audit."audit_log_licenses", audit."audit_log_sessions", etc.). Exceptions (HEARTBEAT_ERROR, PASSWORD_CHANGED, TOKEN_ROTATED, etc.) are heartbeat- or auth-flow-specific by nature and are documented in the migration file header.';
-COMMENT ON COLUMN reference."actions"."code"        IS 'Machine-readable action verb (PK). Examples: CREATED, MODIFIED, REVOKED, DELETED.';
-COMMENT ON COLUMN reference."actions"."description" IS 'Human-readable description of what this action represents in the system.';
+COMMENT ON TABLE  "reference"."actions"               IS 'Lookup table for auditable action verbs recorded in "audit"."audit_logs". Codes are broadly resource-agnostic; the affected resource is captured in audit junction tables ("audit"."audit_log_licenses", "audit"."audit_log_sessions", etc.). Exceptions (HEARTBEAT_ERROR, PASSWORD_CHANGED, TOKEN_ROTATED, etc.) are heartbeat- or auth-flow-specific by nature and are documented in the migration file header.';
+COMMENT ON COLUMN "reference"."actions"."code"        IS 'Machine-readable action verb (PK). Examples: CREATED, MODIFIED, REVOKED, DELETED.';
+COMMENT ON COLUMN "reference"."actions"."description" IS 'Human-readable description of what this action represents in the system.';
 
-INSERT INTO reference."actions" ("code", "description")
+INSERT INTO "reference"."actions" ("code", "description")
 VALUES
     ('SIGNUP',           'A new vendor account was registered on the platform.'),
     ('LOGIN_SUCCESS',    'A vendor successfully authenticated and received an access token.'),

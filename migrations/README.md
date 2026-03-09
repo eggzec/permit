@@ -14,6 +14,9 @@ Scripts are executed in lexicographical order. Each file is idempotent (safe to 
 | 02 | `02_reference.sql` | Creates and seeds all static lookup tables (statuses, error codes, actions) in the `reference` schema. |
 | 03 | `03_app.sql` | Creates all core business tables (`vendors`, `licenses`, `node_locked_license_data`, `sessions`, `heartbeats`) in the `app` schema, including range partitions and indexes. |
 | 04 | `04_audit.sql` | Creates immutable audit trail tables in the `audit` schema and attaches `BEFORE UPDATE OR DELETE` triggers to enforce append-only semantics. |
+| 05 | `05_functions.sql` | Creates app/audit utility functions (`app.set_app_context`, `audit._insert_log`, and explicit-call `audit.log_*` wrappers). |
+| 06 | `06_rls.sql` | Enables and enforces RLS policies across `app` and `audit` schema tables. |
+| 07 | `07_audit_triggers.sql` | Creates audit trigger functions and attaches business triggers (`vendors`, `sessions`, and `v_license_node_locked` view write/delete routing). |
 
 ### Role & Schema Design
 
@@ -55,15 +58,21 @@ Downgrade scripts are located in the `down/` subdirectory and must be executed i
 
 | Order | File | Description |
 |---|---|---|
-| 1st | `04_audit_down.sql` | Removes audit tables, indexes, and trigger functions |
-| 2nd | `03_app_down.sql` | Removes business tables, partitions, and indexes |
-| 3rd | `02_reference_down.sql` | Removes reference lookup tables |
-| 4th | `01_roles_down.sql` | Removes schemas and all group roles |
+| 1st | `07_audit_triggers_down.sql` | Removes view/session/vendor audit triggers and related trigger functions |
+| 2nd | `06_rls_down.sql` | Drops RLS policies and disables RLS across affected tables |
+| 3rd | `05_functions_down.sql` | Drops utility and explicit-call audit functions |
+| 4th | `04_audit_down.sql` | Removes audit tables, indexes, and immutability trigger function |
+| 5th | `03_app_down.sql` | Removes business tables, partitions, views, and indexes |
+| 6th | `02_reference_down.sql` | Removes reference lookup tables |
+| 7th | `01_roles_down.sql` | Removes schemas and all group roles |
 
 To downgrade the entire database:
 
 ```bash
 # Must be run in this exact order to respect FK constraints
+docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/07_audit_triggers_down.sql
+docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/06_rls_down.sql
+docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/05_functions_down.sql
 docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/04_audit_down.sql
 docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/03_app_down.sql
 docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/02_reference_down.sql
@@ -72,11 +81,14 @@ docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/d
 
 ---
 
-## Entity Relationship Diagram (ERD)
+## Entity Relationship Diagrams (ERD)
+
+The ERD is split by schema for readability and to keep each diagram focused.
+
+### Reference Schema ERD
 
 ```mermaid
 erDiagram
-    %% ── REFERENCE SCHEMA ─────────────────────────────────────
     reference_license_statuses {
         text code PK
         text description
@@ -97,8 +109,12 @@ erDiagram
         text code PK
         text description
     }
+```
 
-    %% ── APP SCHEMA ───────────────────────────────────────────
+### App Schema ERD
+
+```mermaid
+erDiagram
     app_vendors {
         uuid id PK
         text email
@@ -143,12 +159,22 @@ erDiagram
         text error_code FK
     }
 
-    %% ── AUDIT SCHEMA ─────────────────────────────────────────
+    app_vendors      ||--o{ app_licenses                 : "owns"
+    app_licenses     ||--o| app_node_locked_license_data : "extends (1:1)"
+    app_licenses     ||--o{ app_sessions                 : "has"
+    app_sessions     ||--o{ app_heartbeats               : "emits"
+```
+
+### Audit Schema ERD
+
+```mermaid
+erDiagram
     audit_audit_logs {
         uuid id PK
         text action_code FK
         inet ip_address
         text user_agent
+        jsonb metadata
         timestamptz created_at
     }
     audit_audit_log_vendor_actors {
@@ -166,23 +192,18 @@ erDiagram
         jsonb changes
     }
 
-    %% ── RELATIONSHIPS ────────────────────────────────────────
-    app_vendors                ||--o{ app_licenses                : "owns"
-    app_licenses               ||--o| app_node_locked_license_data   : "extends (1:1)"
-    app_licenses               ||--o{ app_sessions                : "has"
-    app_sessions               ||--o{ app_heartbeats              : "emits"
-
-    reference_license_statuses      ||--o{ app_licenses           : "defines status"
-    reference_session_statuses      ||--o{ app_sessions           : "defines status"
-    reference_heartbeat_resp_statuses ||--o{ app_heartbeats       : "defines response"
-    reference_error_codes           ||--o{ app_heartbeats         : "defines error"
-
-    reference_actions              ||--o{ audit_audit_logs        : "defines action"
-    audit_audit_logs ||--o| audit_audit_log_vendor_actors         : "actor"
-    audit_audit_logs ||--o| audit_audit_log_licenses              : "affects"
-    audit_audit_logs ||--o| audit_audit_log_sessions              : "affects"
-
-    app_vendors   ||--o{ audit_audit_log_vendor_actors            : "performs"
-    app_licenses  ||--o{ audit_audit_log_licenses                 : "target of"
-    app_sessions  ||--o{ audit_audit_log_sessions                 : "target of"
+    audit_audit_logs ||--o| audit_audit_log_vendor_actors : "actor"
+    audit_audit_logs ||--o| audit_audit_log_licenses      : "affects"
+    audit_audit_logs ||--o| audit_audit_log_sessions      : "affects"
 ```
+
+### Cross-Schema FK Notes
+
+- `app.licenses.license_status_code` -> `reference.license_statuses.code`
+- `app.sessions.session_status_code` -> `reference.session_statuses.code`
+- `app.heartbeats.heartbeat_resp_status_code` -> `reference.heartbeat_resp_statuses.code`
+- `app.heartbeats.error_code` -> `reference.error_codes.code`
+- `audit.audit_logs.action_code` -> `reference.actions.code`
+- `audit.audit_log_vendor_actors.vendor_id` -> `app.vendors.id`
+- `audit.audit_log_licenses.license_id` -> `app.licenses.id`
+- `audit.audit_log_sessions.session_id` -> `app.sessions.id`

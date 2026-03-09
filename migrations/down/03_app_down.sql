@@ -58,7 +58,7 @@ BEGIN;
 -- Drop view first (references base tables)
 -- ============================================================
 
-DROP VIEW IF EXISTS app.v_license_node_locked;
+DROP VIEW IF EXISTS app."v_license_node_locked";
 
 -- ============================================================
 -- Drop app."heartbeats" (partitioned)

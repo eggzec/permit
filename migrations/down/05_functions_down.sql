@@ -28,11 +28,7 @@ BEGIN;
 -- ============================================================
 
 DO $$ BEGIN
-    IF EXISTS (
-        SELECT 1 FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'audit' AND p.proname = 'log_heartbeat_error'
-    ) THEN
+    IF to_regprocedure('audit.log_heartbeat_error(uuid,uuid,text)') IS NOT NULL THEN
         REVOKE EXECUTE ON FUNCTION audit.log_heartbeat_error(UUID, UUID, TEXT)
             FROM app_writer, app_deleter;
     END IF;
@@ -80,7 +76,18 @@ DROP FUNCTION IF EXISTS audit.log_login_success(UUID);
 -- Drop internal audit helper
 -- ============================================================
 
-DROP FUNCTION IF EXISTS audit._insert_log(TEXT, JSONB, UUID, UUID, UUID);
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'audit' AND p.proname = '_insert_log'
+    ) THEN
+        REVOKE EXECUTE ON FUNCTION audit._insert_log(TEXT, UUID, JSONB, UUID, UUID, UUID)
+            FROM app_writer, app_deleter;
+    END IF;
+END $$;
+
+DROP FUNCTION IF EXISTS audit._insert_log(TEXT, UUID, JSONB, UUID, UUID, UUID);
 
 -- ============================================================
 -- Drop app.set_app_context
@@ -93,7 +100,7 @@ DO $$ BEGIN
         WHERE n.nspname = 'app' AND p.proname = 'set_app_context'
     ) THEN
         REVOKE EXECUTE ON FUNCTION app.set_app_context(UUID, TEXT, TEXT)
-            FROM app_reader_rls, app_reader_bypass, app_writer, app_deleter;
+            FROM audit_reader;
     END IF;
 END $$;
 

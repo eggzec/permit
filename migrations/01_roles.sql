@@ -94,23 +94,23 @@ BEGIN;
 -- not yet exist at this point in the migration.
 -- ============================================================
 
-CREATE SCHEMA IF NOT EXISTS reference;
-CREATE SCHEMA IF NOT EXISTS app;
-CREATE SCHEMA IF NOT EXISTS audit;
+CREATE SCHEMA IF NOT EXISTS "reference";
+CREATE SCHEMA IF NOT EXISTS "app";
+CREATE SCHEMA IF NOT EXISTS "audit";
 
-COMMENT ON SCHEMA reference IS
+COMMENT ON SCHEMA "reference" IS
     'Static lookup / reference tables for enumerations and constants. '
     'Rows are inserted once at deploy time and treated as immutable. '
     'Isolated into its own schema to enable independent RBAC '
     '(SELECT-only grants to app roles, no write access).';
 
-COMMENT ON SCHEMA app IS
+COMMENT ON SCHEMA "app" IS
     'Core business tables for the LaaS licensing platform. '
     'Contains all mutable business entities: vendors, licenses, '
     'sessions, and heartbeats. Named "app" to distinguish it from '
     'the PostgreSQL built-in "public" schema.';
 
-COMMENT ON SCHEMA audit IS
+COMMENT ON SCHEMA "audit" IS
     'Immutable append-only audit trail. Separated from the app schema '
     'to enforce independent access control: audit readers have no '
     'business-table access, and business writers cannot delete audit '
@@ -128,25 +128,25 @@ COMMENT ON SCHEMA audit IS
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE ROLE reference_owner NOLOGIN NOINHERIT;
+    CREATE ROLE "reference_owner" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role reference_owner already exists, skipping';
 END $$;
-ALTER ROLE reference_owner NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "reference_owner" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
-    CREATE ROLE reference_reader NOLOGIN NOINHERIT;
+    CREATE ROLE "reference_reader" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role reference_reader already exists, skipping';
 END $$;
-ALTER ROLE reference_reader NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "reference_reader" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
-    CREATE ROLE reference_writer NOLOGIN NOINHERIT;
+    CREATE ROLE "reference_writer" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role reference_writer already exists, skipping';
 END $$;
-ALTER ROLE reference_writer NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "reference_writer" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 
 -- ============================================================
@@ -159,25 +159,25 @@ ALTER ROLE reference_writer NOLOGIN NOINHERIT NOBYPASSRLS;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE ROLE audit_owner NOLOGIN NOINHERIT;
+    CREATE ROLE "audit_owner" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role audit_owner already exists, skipping';
 END $$;
-ALTER ROLE audit_owner NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "audit_owner" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
-    CREATE ROLE audit_writer NOLOGIN NOINHERIT;
+    CREATE ROLE "audit_writer" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role audit_writer already exists, skipping';
 END $$;
-ALTER ROLE audit_writer NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "audit_writer" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
-    CREATE ROLE audit_reader NOLOGIN NOINHERIT;
+    CREATE ROLE "audit_reader" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role audit_reader already exists, skipping';
 END $$;
-ALTER ROLE audit_reader NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "audit_reader" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 
 -- ============================================================
@@ -201,44 +201,44 @@ ALTER ROLE audit_reader NOLOGIN NOINHERIT NOBYPASSRLS;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE ROLE app_owner NOLOGIN NOINHERIT;
+    CREATE ROLE "app_owner" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_owner already exists, skipping';
 END $$;
-ALTER ROLE app_owner NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "app_owner" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
-    CREATE ROLE app_reader_rls NOLOGIN NOINHERIT;
+    CREATE ROLE "app_reader_rls" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_reader_rls already exists, skipping';
 END $$;
-ALTER ROLE app_reader_rls NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "app_reader_rls" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
     -- BYPASSRLS is a role attribute, not a grantable privilege.
     -- The unconditional ALTER ROLE below ensures the attribute is
     -- present even when the role pre-existed without it.
-    CREATE ROLE app_reader_bypass NOLOGIN NOINHERIT BYPASSRLS;
+    CREATE ROLE "app_reader_bypass" NOLOGIN NOINHERIT BYPASSRLS;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_reader_bypass already exists, ensuring BYPASSRLS';
 END $$;
 -- Idempotent: safe to re-run regardless of whether the role
 -- was just created or already existed.
-ALTER ROLE app_reader_bypass NOLOGIN NOINHERIT BYPASSRLS;
+ALTER ROLE "app_reader_bypass" NOLOGIN NOINHERIT BYPASSRLS;
 
 DO $$ BEGIN
-    CREATE ROLE app_writer NOLOGIN NOINHERIT;
+    CREATE ROLE "app_writer" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_writer already exists, skipping';
 END $$;
-ALTER ROLE app_writer NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "app_writer" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 DO $$ BEGIN
-    CREATE ROLE app_deleter NOLOGIN NOINHERIT;
+    CREATE ROLE "app_deleter" NOLOGIN NOINHERIT;
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'role app_deleter already exists, skipping';
 END $$;
-ALTER ROLE app_deleter NOLOGIN NOINHERIT NOBYPASSRLS;
+ALTER ROLE "app_deleter" NOLOGIN NOINHERIT NOBYPASSRLS;
 
 
 -- ============================================================
@@ -248,9 +248,9 @@ ALTER ROLE app_deleter NOLOGIN NOINHERIT NOBYPASSRLS;
 -- roles are created. ALTER SCHEMA … OWNER TO is idempotent.
 -- ============================================================
 
-ALTER SCHEMA reference OWNER TO reference_owner;
-ALTER SCHEMA app       OWNER TO app_owner;
-ALTER SCHEMA audit     OWNER TO audit_owner;
+ALTER SCHEMA "reference" OWNER TO "reference_owner";
+ALTER SCHEMA "app"       OWNER TO "app_owner";
+ALTER SCHEMA "audit"     OWNER TO "audit_owner";
 
 
 -- ============================================================
@@ -266,25 +266,25 @@ ALTER SCHEMA audit     OWNER TO audit_owner;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 REVOKE USAGE  ON SCHEMA public FROM PUBLIC;
 
-REVOKE ALL ON SCHEMA reference FROM PUBLIC;
-REVOKE ALL ON SCHEMA app       FROM PUBLIC;
-REVOKE ALL ON SCHEMA audit     FROM PUBLIC;
+REVOKE ALL ON SCHEMA "reference" FROM PUBLIC;
+REVOKE ALL ON SCHEMA "app"       FROM PUBLIC;
+REVOKE ALL ON SCHEMA "audit"     FROM PUBLIC;
 
 -- Revoke the default EXECUTE-on-all-functions granted to PUBLIC
 -- in each application schema.
-REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA reference FROM PUBLIC;
-REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA app       FROM PUBLIC;
-REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA audit     FROM PUBLIC;
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA "reference" FROM PUBLIC;
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA "app"       FROM PUBLIC;
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA "audit"     FROM PUBLIC;
 
 -- Strip the PUBLIC EXECUTE default for functions created IN THE FUTURE
 -- by each owner role. Without these, any new function deployed by an
 -- owner role would inherit the PostgreSQL default and be executable
 -- by PUBLIC until an explicit REVOKE is issued.
-ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner
+ALTER DEFAULT PRIVILEGES FOR ROLE "reference_owner"
     REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ROLE audit_owner
+ALTER DEFAULT PRIVILEGES FOR ROLE "audit_owner"
     REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
-ALTER DEFAULT PRIVILEGES FOR ROLE app_owner
+ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner"
     REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 
 
@@ -296,16 +296,13 @@ ALTER DEFAULT PRIVILEGES FOR ROLE app_owner
 -- GRANT is idempotent.
 -- ============================================================
 
-GRANT USAGE ON SCHEMA reference TO reference_reader, reference_writer;
-GRANT USAGE ON SCHEMA reference TO app_owner, audit_owner;
-GRANT USAGE ON SCHEMA audit     TO audit_writer, audit_reader;
-GRANT USAGE ON SCHEMA app       TO app_reader_rls, app_reader_bypass,
-                                   app_writer, app_deleter;
-GRANT USAGE ON SCHEMA app       TO audit_owner;
-
--- audit roles need USAGE on app to resolve table names in RLS
--- policy subqueries (audit_log_licenses → app.licenses, etc.)
-GRANT USAGE ON SCHEMA app       TO audit_writer, audit_reader;
+GRANT USAGE ON SCHEMA "reference" TO "reference_reader", "reference_writer";
+GRANT USAGE ON SCHEMA "reference" TO "app_owner", "audit_owner";
+GRANT USAGE ON SCHEMA "audit"     TO "audit_writer", "audit_reader";
+GRANT USAGE ON SCHEMA "app"       TO "app_reader_rls", "app_reader_bypass",
+                                     "app_writer", "app_deleter";
+GRANT USAGE ON SCHEMA "app"       TO "audit_owner", "audit_writer",
+                                     "audit_reader";
 
 
 -- ============================================================
@@ -318,43 +315,43 @@ GRANT USAGE ON SCHEMA app       TO audit_writer, audit_reader;
 -- ============================================================
 
 -- --- reference schema ---
-ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
-    GRANT SELECT              ON TABLES    TO reference_reader;
-ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
-    GRANT INSERT              ON TABLES    TO reference_writer;
-ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
-    GRANT USAGE, SELECT       ON SEQUENCES TO reference_writer;
-ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
-    GRANT EXECUTE             ON FUNCTIONS TO reference_reader, reference_writer;
-ALTER DEFAULT PRIVILEGES FOR ROLE reference_owner IN SCHEMA reference
-    GRANT REFERENCES          ON TABLES    TO app_owner, audit_owner;
+ALTER DEFAULT PRIVILEGES FOR ROLE "reference_owner" IN SCHEMA "reference"
+    GRANT SELECT              ON TABLES    TO "reference_reader";
+ALTER DEFAULT PRIVILEGES FOR ROLE "reference_owner" IN SCHEMA "reference"
+    GRANT INSERT              ON TABLES    TO "reference_writer";
+ALTER DEFAULT PRIVILEGES FOR ROLE "reference_owner" IN SCHEMA "reference"
+    GRANT USAGE, SELECT       ON SEQUENCES TO "reference_writer";
+ALTER DEFAULT PRIVILEGES FOR ROLE "reference_owner" IN SCHEMA "reference"
+    GRANT EXECUTE             ON FUNCTIONS TO "reference_reader", "reference_writer";
+ALTER DEFAULT PRIVILEGES FOR ROLE "reference_owner" IN SCHEMA "reference"
+    GRANT REFERENCES          ON TABLES    TO "app_owner", "audit_owner";
 
 -- --- audit schema ---
-ALTER DEFAULT PRIVILEGES FOR ROLE audit_owner IN SCHEMA audit
-    GRANT INSERT              ON TABLES    TO audit_writer;
-ALTER DEFAULT PRIVILEGES FOR ROLE audit_owner IN SCHEMA audit
-    GRANT SELECT              ON TABLES    TO audit_reader;
-ALTER DEFAULT PRIVILEGES FOR ROLE audit_owner IN SCHEMA audit
-    GRANT USAGE, SELECT       ON SEQUENCES TO audit_writer;
-ALTER DEFAULT PRIVILEGES FOR ROLE audit_owner IN SCHEMA audit
-    GRANT EXECUTE             ON FUNCTIONS TO audit_writer, audit_reader;
+ALTER DEFAULT PRIVILEGES FOR ROLE "audit_owner" IN SCHEMA "audit"
+    GRANT INSERT              ON TABLES    TO "audit_writer";
+ALTER DEFAULT PRIVILEGES FOR ROLE "audit_owner" IN SCHEMA "audit"
+    GRANT SELECT              ON TABLES    TO "audit_reader";
+ALTER DEFAULT PRIVILEGES FOR ROLE "audit_owner" IN SCHEMA "audit"
+    GRANT USAGE, SELECT       ON SEQUENCES TO "audit_writer";
+ALTER DEFAULT PRIVILEGES FOR ROLE "audit_owner" IN SCHEMA "audit"
+    GRANT EXECUTE             ON FUNCTIONS TO "audit_writer", "audit_reader";
 
 -- --- app schema ---
-ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
-    GRANT SELECT                      ON TABLES    TO app_reader_rls, app_reader_bypass;
-ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
-    GRANT SELECT, INSERT, UPDATE      ON TABLES    TO app_writer;
-ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
-    GRANT SELECT, DELETE              ON TABLES    TO app_deleter;
-ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
-    GRANT USAGE, SELECT               ON SEQUENCES TO app_writer;
-ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
-    GRANT SELECT                      ON SEQUENCES TO app_reader_rls, app_reader_bypass;
-ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
-    GRANT EXECUTE                     ON FUNCTIONS TO app_reader_rls, app_reader_bypass,
-                                                      app_writer, app_deleter;
-ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
-    GRANT REFERENCES                  ON TABLES    TO audit_owner;
+ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner" IN SCHEMA "app"
+    GRANT SELECT                      ON TABLES    TO "app_reader_rls", "app_reader_bypass";
+ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner" IN SCHEMA "app"
+    GRANT SELECT, INSERT, UPDATE      ON TABLES    TO "app_writer";
+ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner" IN SCHEMA "app"
+    GRANT SELECT, DELETE              ON TABLES    TO "app_deleter";
+ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner" IN SCHEMA "app"
+    GRANT USAGE, SELECT               ON SEQUENCES TO "app_writer";
+ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner" IN SCHEMA "app"
+    GRANT SELECT                      ON SEQUENCES TO "app_reader_rls", "app_reader_bypass";
+ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner" IN SCHEMA "app"
+    GRANT EXECUTE                     ON FUNCTIONS TO "app_reader_rls", "app_reader_bypass",
+                                                      "app_writer", "app_deleter";
+ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner" IN SCHEMA "app"
+    GRANT REFERENCES                  ON TABLES    TO "audit_owner";
 
 
 -- ============================================================
@@ -366,39 +363,26 @@ ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA app
 -- ============================================================
 
 -- --- reference ---
-GRANT SELECT                  ON ALL TABLES    IN SCHEMA reference TO reference_reader;
-GRANT INSERT                  ON ALL TABLES    IN SCHEMA reference TO reference_writer;
-GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA reference TO reference_writer;
-GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA reference TO reference_reader, reference_writer;
-GRANT REFERENCES              ON ALL TABLES    IN SCHEMA reference TO app_owner, audit_owner;
+GRANT SELECT                  ON ALL TABLES    IN SCHEMA "reference" TO "reference_reader";
+GRANT INSERT                  ON ALL TABLES    IN SCHEMA "reference" TO "reference_writer";
+GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA "reference" TO "reference_writer";
+GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA "reference" TO "reference_reader", "reference_writer";
+GRANT REFERENCES              ON ALL TABLES    IN SCHEMA "reference" TO "app_owner", "audit_owner";
 
 -- --- audit ---
-GRANT INSERT                  ON ALL TABLES    IN SCHEMA audit TO audit_writer;
-GRANT SELECT                  ON ALL TABLES    IN SCHEMA audit TO audit_reader;
-GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA audit TO audit_writer;
-GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA audit TO audit_writer, audit_reader;
-
--- Needed for RLS policy subqueries on audit junction tables:
--- audit_log_licenses  → app."licenses"  (filtered by app RLS)
--- audit_log_sessions  → app."sessions"  (filtered by app RLS)
-GRANT SELECT                  ON app."licenses" TO audit_writer, audit_reader;
-GRANT SELECT                  ON app."sessions" TO audit_writer, audit_reader;
+GRANT INSERT                  ON ALL TABLES    IN SCHEMA "audit" TO "audit_writer";
+GRANT SELECT                  ON ALL TABLES    IN SCHEMA "audit" TO "audit_reader";
+GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA "audit" TO "audit_writer";
+GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA "audit" TO "audit_writer", "audit_reader";
 
 -- --- app ---
-GRANT SELECT                  ON ALL TABLES    IN SCHEMA app TO app_reader_rls, app_reader_bypass;
-GRANT SELECT, INSERT, UPDATE  ON ALL TABLES    IN SCHEMA app TO app_writer;
-GRANT SELECT, DELETE          ON ALL TABLES    IN SCHEMA app TO app_deleter;
-GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA app TO app_writer;
-GRANT SELECT                  ON ALL SEQUENCES IN SCHEMA app TO app_reader_rls, app_reader_bypass;
-GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA app TO app_reader_rls, app_reader_bypass,
-                                                                app_writer, app_deleter;
-GRANT REFERENCES              ON ALL TABLES    IN SCHEMA app TO audit_owner;
-
-
--- ============================================================
--- VIEW NOTES (informational — no DDL)
--- ============================================================
--- SELECT on views is covered by the table-level grants above.
+GRANT SELECT                  ON ALL TABLES    IN SCHEMA "app" TO "app_reader_rls", "app_reader_bypass";
+GRANT SELECT, INSERT, UPDATE  ON ALL TABLES    IN SCHEMA "app" TO "app_writer";
+GRANT SELECT, DELETE          ON ALL TABLES    IN SCHEMA "app" TO "app_deleter";
+GRANT USAGE, SELECT           ON ALL SEQUENCES IN SCHEMA "app" TO "app_writer";
+GRANT SELECT                  ON ALL SEQUENCES IN SCHEMA "app" TO "app_reader_rls", "app_reader_bypass";
+GRANT EXECUTE                 ON ALL FUNCTIONS IN SCHEMA "app" TO "app_reader_rls", "app_reader_bypass",
+                                                                  "app_writer", "app_deleter";
 -- Only owner roles can CREATE views (they own the schema).
 -- Writers do not receive CREATE privilege.
 --
@@ -446,32 +430,5 @@ GRANT REFERENCES              ON ALL TABLES    IN SCHEMA app TO audit_owner;
 --   GRANT reference_reader  TO admin_user;
 --   GRANT audit_reader      TO admin_user;
 --   GRANT app_reader_bypass TO admin_user;
-
-
--- ============================================================
--- LICENSE BASE TABLE WRITE RESTRICTION
--- ============================================================
--- app."licenses" and app."node_locked_license_data" must only
--- be written through their subtype views (e.g.
--- app.v_license_node_locked). The INSTEAD OF trigger on each
--- view handles both DML routing and audit logging atomically,
--- producing a unified diff across the base and extension tables.
---
--- Revoking direct INSERT/UPDATE/DELETE from app_writer and
--- app_deleter enforces this constraint at the database layer.
--- app_owner retains full access for migrations and trigger
--- function internals which run as app_owner via SECURITY DEFINER.
---
--- Future license subtypes follow the same pattern: create a
--- new view joining app."licenses" with the new extension table,
--- add an INSTEAD OF trigger, and revoke direct writes on the
--- new extension table from app_writer and app_deleter here.
--- ============================================================
-
-REVOKE INSERT, UPDATE, DELETE ON app."licenses"
-    FROM app_writer, app_deleter;
-
-REVOKE INSERT, UPDATE, DELETE ON app."node_locked_license_data"
-    FROM app_writer, app_deleter;
 
 COMMIT;

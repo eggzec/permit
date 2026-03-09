@@ -19,4 +19,4 @@ import pytest
 if __name__ == "__main__":
     base_dir = Path(__file__).parent
     os.chdir(base_dir)
-    pytest.main(["tests", "-v", "--tb=short", *sys.argv[1:]])
+    sys.exit(pytest.main(["tests", "-v", "--tb=short", *sys.argv[1:]]))

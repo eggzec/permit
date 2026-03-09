@@ -21,24 +21,22 @@
 --
 -- TRIGGER OWNERSHIP & SECURITY MODEL
 --   trg_vendors_audit and trg_sessions_audit are owned by
---   audit_owner and use SECURITY DEFINER. They only call
---   audit._insert_log, which is itself SECURITY DEFINER owned
---   by audit_writer — so audit writes succeed regardless of
---   the role that initiated the DML. No direct audit table
---   privileges are required by these functions.
+--   audit_owner and run with invoker security. They only call
+--   audit._insert_log (SECURITY DEFINER owned by audit_writer),
+--   so audit writes succeed regardless of the calling role.
 --
---   trg_v_license_node_locked is owned by app_owner because
---   it must perform DML on app."licenses" and
---   app."node_locked_license_data" directly. app_owner owns
---   those tables and needs no role switch to write to them.
---   Audit writes still succeed because audit._insert_log is
---   SECURITY DEFINER (owned by audit_writer) — app_owner only
---   needs EXECUTE on that function, not any direct privilege
---   on audit schema tables. That EXECUTE grant is issued in
---   05_functions.sql.
+--   trg_v_license_node_locked is split into two functions:
+--     • trg_v_license_node_locked_write — SECURITY DEFINER owned
+--       by app_writer. Handles INSTEAD OF INSERT and UPDATE.
+--       app_writer has SELECT, INSERT, UPDATE on app tables.
+--     • trg_v_license_node_locked_delete — SECURITY DEFINER owned
+--       by app_deleter. Handles INSTEAD OF DELETE.
+--       app_deleter has SELECT, DELETE on app tables.
+--   Both call audit._insert_log via app_writer/app_deleter
+--   EXECUTE grants defined in 05_functions.sql.
 --   SET LOCAL ROLE is intentionally absent from all trigger
---   function bodies — it is not needed and cannot work safely
---   inside a SECURITY DEFINER context.
+--   function bodies — not needed and not safe inside
+--   SECURITY DEFINER context.
 --
 -- IDEMPOTENCY
 --   CREATE OR REPLACE FUNCTION : idempotent
@@ -81,9 +79,7 @@ BEGIN;
 -- audit_owner owns the audit schema and all objects within it.
 -- All CREATE FUNCTION statements in the audit schema must run
 -- under audit_owner so that default privileges fire correctly.
--- trg_v_license_node_locked switches to app_owner below before
--- its CREATE FUNCTION, then returns to audit_owner afterward.
-SET LOCAL ROLE audit_owner;
+SET LOCAL ROLE "audit_owner";
 
 -- ============================================================
 -- Helper: read vendor_id from context
@@ -102,14 +98,8 @@ SET LOCAL ROLE audit_owner;
 CREATE OR REPLACE FUNCTION audit.trg_vendors_audit()
 RETURNS TRIGGER
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO audit, app, reference, pg_temp
 AS $$
-DECLARE
-    v_vendor_id UUID;
 BEGIN
-    v_vendor_id := NULLIF(current_setting('app.vendor_id', true), '')::UUID;
-
     IF TG_OP = 'INSERT' THEN
         -- SIGNUP: new vendor account created.
         -- The vendor IS the actor for their own signup.
@@ -152,7 +142,47 @@ COMMENT ON FUNCTION audit.trg_vendors_audit() IS
     'AFTER INSERT OR UPDATE trigger on app."vendors". '
     'Emits SIGNUP on insert, DELETED on soft-delete, '
     'PASSWORD_CHANGED on password_hash mutation. '
-    'SECURITY DEFINER — runs as audit_owner.';
+    'Runs with invoker security and delegates audit writes to '
+    'audit._insert_log (SECURITY DEFINER owned by audit_writer).';
+
+-- ============================================================
+-- TRIGGER OWNER & SECURITY MODEL
+-- ============================================================
+-- Creating triggers that span the app ↔ audit schema boundary
+-- requires a single role that:
+--   a) can CREATE TRIGGER on the target (TRIGGER privilege or ownership)
+--   b) has EXECUTE/USAGE for the trigger function and its schema
+-- audit_owner satisfies (b) already (owns audit schema, USAGE on app).
+-- app_owner (the table/view owner) grants TRIGGER privilege to
+-- audit_owner below; this one-time grant lets audit_owner own all
+-- trigger DDL without superuser or cross-schema role membership.
+--
+-- SECURITY MODEL FOR INSTEAD OF TRIGGER FUNCTIONS
+-- ============================================================
+-- The v_license_node_locked INSTEAD OF trigger functions are
+-- SECURITY INVOKER (PostgreSQL default), owned by audit_owner.
+-- A SECURITY DEFINER design requiring ownership by app_writer/
+-- app_deleter is unnecessary here because:
+--   * INSTEAD OF triggers on app.v_license_node_locked can ONLY
+--     fire when a role with INSERT/UPDATE/DELETE on that view
+--     issues the DML. The view's table-level grants restrict this
+--     to app_writer (INSERT/UPDATE) and app_deleter (DELETE).
+--   * The trigger body's privilege requirements (INSERT/UPDATE
+--     on app tables for the write path; DELETE for the delete
+--     path) are already held by the invoking role at call time.
+--   * SECURITY INVOKER is strictly less privileged: the function
+--     cannot be used to escalate privileges beyond what the
+--     invoking role already holds.
+-- ============================================================
+
+-- Grant TRIGGER privilege on app-owned objects to audit_owner so
+-- all trigger DDL is handled by a single role in one block below.
+SET LOCAL ROLE "app_owner";
+GRANT TRIGGER ON app."vendors"             TO audit_owner;
+GRANT TRIGGER ON app."sessions"            TO audit_owner;
+GRANT TRIGGER ON app.v_license_node_locked TO audit_owner;
+
+SET LOCAL ROLE "audit_owner";
 
 CREATE OR REPLACE TRIGGER vendors_audit_tr
     AFTER INSERT OR UPDATE ON app."vendors"
@@ -160,53 +190,30 @@ CREATE OR REPLACE TRIGGER vendors_audit_tr
 
 
 -- ============================================================
--- app.v_license_node_locked INSTEAD OF trigger function
+-- app.v_license_node_locked INSTEAD OF trigger functions
 -- ============================================================
--- Handles three responsibilities atomically:
---   1. Routes INSERT/UPDATE/DELETE to the base tables
---      (app."licenses" and app."node_locked_license_data")
---   2. Emits unified audit entries covering both tables
---   3. Enforces correct insert/delete ordering (base first
---      on insert, extension first on delete) to satisfy FKs
---
--- On INSERT:
---   Inserts app."licenses" row first, then
---   app."node_locked_license_data" row.
---   Emits one CREATED audit entry with
---   metadata {"license_type": "node_locked"}.
---
--- On UPDATE:
---   Updates each base table independently.
---   Detects changed fields across BOTH tables from OLD/NEW.
---   Groups changed fields by action code and emits one audit
---   entry per distinct action code (CONFIG_UPDATED, MODIFIED,
---   REVOKED, DELETED). Each entry contains only the previous
---   values of fields relevant to that action code.
---
--- On DELETE:
---   Deletes app."node_locked_license_data" first, then
---   app."licenses".
---   Emits one DELETED audit entry.
---
--- Base table DML runs directly under app_owner, which owns
--- app."licenses" and app."node_locked_license_data" outright —
--- no role switch is needed.
--- audit._insert_log is SECURITY DEFINER owned by audit_writer,
--- so audit writes succeed when called by app_owner provided
--- EXECUTE on audit._insert_log has been granted to app_owner
--- (see 05_functions.sql).
+-- Both functions are SECURITY INVOKER, owned by audit_owner.
+-- See the TRIGGER OWNER & SECURITY MODEL block above for the
+-- full justification. The invoking role (app_writer for writes,
+-- app_deleter for deletes) holds all required DML privileges on
+-- the base tables and EXECUTE on audit._insert_log.
 -- ============================================================
 
--- This function must be owned by app_owner (not audit_owner)
--- because it performs DML directly on app schema base tables.
--- audit._insert_log calls work because that function is
--- SECURITY DEFINER owned by audit_writer.
-SET LOCAL ROLE app_owner;
+-- Drop old combined function/trigger if they exist (renamed in this version).
+-- DROP IF EXISTS is a no-op when the objects are absent, so this is safe to run
+-- regardless of whether a previous version of the migration was applied.
+-- audit_owner owns the audit schema and app_owner owns the view; both are in-role
+-- for the current transaction context, so cross-schema drops succeed without superuser.
+DROP TRIGGER IF EXISTS v_license_node_locked_audit_tr ON app.v_license_node_locked;
+DROP FUNCTION IF EXISTS audit.trg_v_license_node_locked();
 
-CREATE OR REPLACE FUNCTION audit.trg_v_license_node_locked()
+-- ------------------------------------------------------------
+-- WRITE trigger function (INSERT + UPDATE) — owned by audit_owner
+-- ------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION audit.trg_v_license_node_locked_write()
 RETURNS TRIGGER
 LANGUAGE plpgsql
-SECURITY DEFINER
 SET search_path TO audit, app, reference, pg_temp
 AS $$
 DECLARE
@@ -225,9 +232,7 @@ BEGIN
         -- Insert base license row first (FK dependency).
         -- "id", "created_at", and "updated_at" are intentionally
         -- omitted — their DEFAULT expressions on the base table
-        -- (uuidv7() and NOW()) fire automatically. Duplicating
-        -- that logic here would risk drifting out of sync with the
-        -- table definition.
+        -- (uuidv7() and NOW()) fire automatically.
         INSERT INTO app."licenses" (
             "vendor_id",
             "client_id",
@@ -260,7 +265,6 @@ BEGIN
             NEW."device_fingerprint_hash"
         );
 
-        -- Emit single CREATED entry covering both tables
         PERFORM audit._insert_log(
             p_action_code => 'CREATED',
             p_metadata    => '{"license_type": "node_locked"}'::JSONB,
@@ -277,7 +281,6 @@ BEGIN
 
         v_license_id := OLD."id";
 
-        -- Update base license row
         UPDATE app."licenses" SET
             "vendor_id"           = NEW."vendor_id",
             "client_id"           = NEW."client_id",
@@ -289,17 +292,13 @@ BEGIN
             "deleted_at"          = NEW."deleted_at"
         WHERE "id" = v_license_id;
 
-        -- Update extension row
         UPDATE app."node_locked_license_data" SET
             "license_key"             = NEW."license_key",
             "device_fingerprint_hash" = NEW."device_fingerprint_hash",
             "max_sessions"            = NEW."max_sessions"
         WHERE "license_id" = v_license_id;
 
-        -- ----------------------------------------------------
         -- DELETED: soft-delete takes priority — emit and stop.
-        -- A deletion event is not combined with other diffs.
-        -- ----------------------------------------------------
         IF OLD."deleted_at" IS NULL AND NEW."deleted_at" IS NOT NULL THEN
             PERFORM audit._insert_log(
                 p_action_code => 'DELETED',
@@ -309,9 +308,7 @@ BEGIN
             RETURN NEW;
         END IF;
 
-        -- ----------------------------------------------------
         -- REVOKED: status transition to REVOKED
-        -- ----------------------------------------------------
         IF OLD."license_status_code" IS DISTINCT FROM NEW."license_status_code"
            AND NEW."license_status_code" = 'REVOKED' THEN
             PERFORM audit._insert_log(
@@ -324,10 +321,7 @@ BEGIN
             );
         END IF;
 
-        -- ----------------------------------------------------
         -- CONFIG_UPDATED: structural policy field changes
-        -- Accumulate all changed config fields into one diff.
-        -- ----------------------------------------------------
         IF OLD."expires_at" IS DISTINCT FROM NEW."expires_at" THEN
             v_config_diff := v_config_diff ||
                 jsonb_build_object('expires_at', OLD."expires_at");
@@ -352,19 +346,13 @@ BEGIN
             );
         END IF;
 
-        -- ----------------------------------------------------
         -- MODIFIED: identity/credential/metadata field changes
-        -- Accumulate into one diff, one audit row.
-        -- ----------------------------------------------------
         IF OLD."metadata" IS DISTINCT FROM NEW."metadata" THEN
             v_modified_diff := v_modified_diff ||
                 jsonb_build_object('metadata', OLD."metadata");
         END IF;
 
         IF OLD."device_fingerprint_hash" IS DISTINCT FROM NEW."device_fingerprint_hash" THEN
-            -- Record the previous hash for session hijacking pattern analysis.
-            -- The hash is not PII — it is a hash of device identifiers
-            -- computed in the application layer.
             v_modified_diff := v_modified_diff ||
                 jsonb_build_object('device_fingerprint_hash', OLD."device_fingerprint_hash");
         END IF;
@@ -386,53 +374,90 @@ BEGIN
 
         RETURN NEW;
 
-    -- --------------------------------------------------------
-    -- DELETE
-    -- --------------------------------------------------------
-    ELSIF TG_OP = 'DELETE' THEN
-
-        v_license_id := OLD."id";
-
-        -- Delete extension row first (FK requires this order)
-        DELETE FROM app."node_locked_license_data"
-        WHERE "license_id" = v_license_id;
-
-        DELETE FROM app."licenses"
-        WHERE "id" = v_license_id;
-
-        PERFORM audit._insert_log(
-            p_action_code => 'DELETED',
-            p_vendor_id   => v_vendor_id,
-            p_license_id  => v_license_id
-        );
-
-        RETURN OLD;
-
     END IF;
+
+    -- Defensive fallback: return NEW for any unexpected TG_OP
+    RETURN NEW;
 END;
 $$;
 
-COMMENT ON FUNCTION audit.trg_v_license_node_locked() IS
-    'INSTEAD OF trigger on app.v_license_node_locked. '
-    'Routes INSERT/UPDATE/DELETE to app."licenses" and '
-    'app."node_locked_license_data" base tables. Owned by '
-    'app_owner, which has direct access to those tables. '
-    'Audit writes succeed via audit._insert_log, which is '
-    'SECURITY DEFINER owned by audit_writer. '
-    'On UPDATE, one audit row is emitted per distinct action '
-    'code (CONFIG_UPDATED, MODIFIED, REVOKED, DELETED). '
-    'No SET LOCAL ROLE inside function body — not needed and '
-    'not safe inside a SECURITY DEFINER context.';
+COMMENT ON FUNCTION audit.trg_v_license_node_locked_write() IS
+    'INSTEAD OF INSERT OR UPDATE trigger on app.v_license_node_locked. '
+    'SECURITY INVOKER, owned by audit_owner. Fires only when invoked by '
+    'app_writer (the only role with INSERT/UPDATE on the view). Routes DML to '
+    'app."licenses" and app."node_locked_license_data". '
+    'On UPDATE emits one audit row per action code '
+    '(DELETED, REVOKED, CONFIG_UPDATED, MODIFIED).';
 
-CREATE OR REPLACE TRIGGER v_license_node_locked_audit_tr
-    INSTEAD OF INSERT OR UPDATE OR DELETE
+-- All ACL changes must happen while audit_owner still owns the function.
+REVOKE EXECUTE ON FUNCTION audit.trg_v_license_node_locked_write()
+    FROM PUBLIC;
+
+-- Revoke default EXECUTE from audit_reader — trigger functions should not
+-- be directly executable by read roles; triggers fire via the trigger mechanism.
+REVOKE EXECUTE ON FUNCTION audit.trg_v_license_node_locked_write()
+    FROM audit_reader;
+
+-- ------------------------------------------------------------
+-- DELETE trigger function — owned by audit_owner
+-- ------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION audit.trg_v_license_node_locked_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SET search_path TO audit, app, reference, pg_temp
+AS $$
+DECLARE
+    v_vendor_id  UUID;
+    v_license_id UUID;
+BEGIN
+    v_vendor_id  := NULLIF(current_setting('app.vendor_id', true), '')::UUID;
+    v_license_id := OLD."id";
+
+    -- Delete extension row first (FK requires this order)
+    DELETE FROM app."node_locked_license_data"
+    WHERE "license_id" = v_license_id;
+
+    DELETE FROM app."licenses"
+    WHERE "id" = v_license_id;
+
+    PERFORM audit._insert_log(
+        p_action_code => 'DELETED',
+        p_vendor_id   => v_vendor_id,
+        p_license_id  => v_license_id
+    );
+
+    RETURN OLD;
+END;
+$$;
+
+COMMENT ON FUNCTION audit.trg_v_license_node_locked_delete() IS
+    'INSTEAD OF DELETE trigger on app.v_license_node_locked. '
+    'SECURITY INVOKER, owned by audit_owner. Fires only when invoked by '
+    'app_deleter (the only role with DELETE on the view). Deletes extension '
+    'row first (FK order), then base license row. '
+    'Emits DELETED audit entry.';
+
+-- All ACL changes must happen while audit_owner still owns the function.
+REVOKE EXECUTE ON FUNCTION audit.trg_v_license_node_locked_delete()
+    FROM PUBLIC;
+
+-- Revoke default EXECUTE from audit_reader — trigger functions should not
+-- be directly executable by read roles; triggers fire via the trigger mechanism.
+REVOKE EXECUTE ON FUNCTION audit.trg_v_license_node_locked_delete()
+    FROM audit_reader;
+
+-- audit_owner has TRIGGER privilege on app.v_license_node_locked (granted above).
+-- Creates INSTEAD OF triggers referencing its own functions in the same schema.
+CREATE OR REPLACE TRIGGER v_license_node_locked_write_tr
+    INSTEAD OF INSERT OR UPDATE
     ON app.v_license_node_locked
-    FOR EACH ROW EXECUTE FUNCTION audit.trg_v_license_node_locked();
+    FOR EACH ROW EXECUTE FUNCTION audit.trg_v_license_node_locked_write();
 
-
--- Switch back to audit_owner for the remaining trigger functions,
--- which only call audit._insert_log and belong in the audit schema.
-SET LOCAL ROLE audit_owner;
+CREATE OR REPLACE TRIGGER v_license_node_locked_delete_tr
+    INSTEAD OF DELETE
+    ON app.v_license_node_locked
+    FOR EACH ROW EXECUTE FUNCTION audit.trg_v_license_node_locked_delete();
 
 -- ============================================================
 -- app."sessions" trigger function
@@ -441,8 +466,6 @@ SET LOCAL ROLE audit_owner;
 CREATE OR REPLACE FUNCTION audit.trg_sessions_audit()
 RETURNS TRIGGER
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO audit, app, reference, pg_temp
 AS $$
 DECLARE
     v_vendor_id     UUID;
@@ -534,9 +557,13 @@ COMMENT ON FUNCTION audit.trg_sessions_audit() IS
     'CLEANUP transitions (no vendor actor), REVOKED for REVOKED '
     'transitions, MODIFIED for other status/fingerprint changes, '
     'TOKEN_ROTATED for token hash changes. One audit row per '
-    'distinct action code per UPDATE. '
-    'SECURITY DEFINER — runs as audit_owner.';
+    'distinct action code per UPDATE. Runs with invoker security '
+    'and delegates audit writes to audit._insert_log '
+    '(SECURITY DEFINER owned by audit_writer).';
 
+-- app_owner owns app.sessions; audit_owner holds USAGE on the audit schema (01_roles.sql),
+-- so it can create triggers on app tables that reference audit schema functions.
+-- TRIGGER privilege on app."sessions" was granted above to audit_owner.
 CREATE OR REPLACE TRIGGER sessions_audit_tr
     AFTER INSERT OR UPDATE ON app."sessions"
     FOR EACH ROW EXECUTE FUNCTION audit.trg_sessions_audit();

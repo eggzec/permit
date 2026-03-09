@@ -28,9 +28,10 @@ BEGIN;
 -- Drop triggers first (before their functions)
 -- ============================================================
 
-DROP TRIGGER IF EXISTS vendors_audit_tr              ON app."vendors";
-DROP TRIGGER IF EXISTS sessions_audit_tr             ON app."sessions";
-DROP TRIGGER IF EXISTS v_license_node_locked_audit_tr ON app.v_license_node_locked;
+DROP TRIGGER IF EXISTS vendors_audit_tr                ON app.vendors;
+DROP TRIGGER IF EXISTS sessions_audit_tr               ON app.sessions;
+DROP TRIGGER IF EXISTS v_license_node_locked_write_tr  ON app.v_license_node_locked;
+DROP TRIGGER IF EXISTS v_license_node_locked_delete_tr ON app.v_license_node_locked;
 
 -- ============================================================
 -- Drop trigger functions
@@ -38,6 +39,7 @@ DROP TRIGGER IF EXISTS v_license_node_locked_audit_tr ON app.v_license_node_lock
 
 DROP FUNCTION IF EXISTS audit.trg_vendors_audit();
 DROP FUNCTION IF EXISTS audit.trg_sessions_audit();
-DROP FUNCTION IF EXISTS audit.trg_v_license_node_locked();
+DROP FUNCTION IF EXISTS audit.trg_v_license_node_locked_write();
+DROP FUNCTION IF EXISTS audit.trg_v_license_node_locked_delete();
 
 COMMIT;

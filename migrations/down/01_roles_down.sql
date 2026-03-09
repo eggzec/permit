@@ -68,6 +68,10 @@ DO $$ BEGIN
         SELECT 1 FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'app' AND c.relname = 'licenses'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_deleter'
     ) THEN
         GRANT INSERT, UPDATE, DELETE ON app."licenses"
             TO app_writer, app_deleter;
@@ -79,6 +83,10 @@ DO $$ BEGIN
         SELECT 1 FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'app' AND c.relname = 'node_locked_license_data'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_deleter'
     ) THEN
         GRANT INSERT, UPDATE, DELETE ON app."node_locked_license_data"
             TO app_writer, app_deleter;
@@ -102,6 +110,10 @@ DO $$ BEGIN
         SELECT 1 FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'app' AND c.relname = 'licenses'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader'
     ) THEN
         REVOKE SELECT ON app."licenses" FROM audit_writer, audit_reader;
     END IF;
@@ -112,6 +124,10 @@ DO $$ BEGIN
         SELECT 1 FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'app' AND c.relname = 'sessions'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader'
     ) THEN
         REVOKE SELECT ON app."sessions" FROM audit_writer, audit_reader;
     END IF;
@@ -120,6 +136,10 @@ END $$;
 DO $$ BEGIN
     IF EXISTS (
         SELECT 1 FROM pg_namespace WHERE nspname = 'app'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader'
     ) THEN
         REVOKE USAGE ON SCHEMA app FROM audit_writer, audit_reader;
     END IF;

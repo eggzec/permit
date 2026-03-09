@@ -20,18 +20,21 @@
 --
 -- FUNCTION OWNERSHIP & SECURITY MODEL
 --   set_app_context        — owned by app_owner (app schema utility)
---   audit.log_*            — owned by audit_writer (SECURITY DEFINER)
+--   audit.log_*            — owned by audit_owner; no SECURITY DEFINER (invoker)
+--   audit._insert_log      — owned by audit_owner (SECURITY DEFINER runs as
+--                            audit_owner; body is INSERT-only and search_path is
+--                            fixed, so the broader ownership is safe in practice)
 --
---   SECURITY DEFINER on audit.log_* functions means they execute
---   with audit_writer's privileges regardless of the calling role.
---   This allows app_writer and app_deleter to insert audit records
---   without holding any direct privileges on audit schema tables.
+--   Because audit.log_* are invoker functions, the calling role's
+--   EXECUTE privilege on audit._insert_log is what gates audit writes.
+--   app_writer and app_deleter are explicitly granted EXECUTE on
+--   _insert_log so their calls through the log_* wrappers succeed.
 --
 --   Privilege chain:
 --     app_writer / app_deleter
---       → EXECUTE on audit.log_* functions
---         → runs as audit_writer (SECURITY DEFINER)
---           → audit_writer has INSERT on audit.*
+--       → EXECUTE on audit.log_* (owned by audit_owner, invoker)
+--         → log_* calls audit._insert_log (SECURITY DEFINER)
+--           → runs with audit_writer's INSERT privileges on audit.*
 --
 -- CONTEXT VARIABLES
 --   All functions read transaction-local config variables set
@@ -92,7 +95,7 @@ BEGIN;
 -- or ROLLBACK. Safe for connection pool reuse.
 -- ============================================================
 
-SET LOCAL ROLE app_owner;
+SET LOCAL ROLE "app_owner";
 
 CREATE OR REPLACE FUNCTION app.set_app_context(
     p_vendor_id  UUID,
@@ -103,7 +106,7 @@ RETURNS void
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM set_config('app.vendor_id',  p_vendor_id::TEXT,  true);
+    PERFORM set_config('app.vendor_id',  COALESCE(p_vendor_id::TEXT, ''), true);
     PERFORM set_config('app.ip_address', COALESCE(p_ip_address, ''), true);
     PERFORM set_config('app.user_agent', COALESCE(p_user_agent, ''), true);
 END;
@@ -115,11 +118,8 @@ COMMENT ON FUNCTION app.set_app_context(UUID, TEXT, TEXT) IS
     'after authentication. All values reset automatically at '
     'COMMIT/ROLLBACK — safe for connection pool reuse.';
 
--- The broad EXECUTE grant from 01_roles.sql covers all app functions.
--- set_app_context is an exception: readers and deleters must not be
--- able to set their own vendor context. Revoke from those roles explicitly.
-REVOKE EXECUTE ON FUNCTION app.set_app_context(UUID, TEXT, TEXT)
-    FROM app_reader_rls, app_reader_bypass, app_deleter;
+GRANT EXECUTE ON FUNCTION app.set_app_context(UUID, TEXT, TEXT)
+    TO audit_reader;
 
 
 -- ============================================================
@@ -131,8 +131,9 @@ REVOKE EXECUTE ON FUNCTION app.set_app_context(UUID, TEXT, TEXT)
 -- from transaction-local config, inserts the core audit_logs
 -- row, optionally inserts junction rows.
 --
--- Owned by audit_writer. SECURITY DEFINER so it runs with
--- audit_writer's INSERT privileges regardless of caller.
+-- Created and owned by audit_owner. SECURITY DEFINER ensures all audit
+-- writes execute with audit_owner's schema privileges regardless
+-- of the calling role. Body is restricted to INSERT operations;
 -- SET search_path prevents search-path injection.
 --
 -- This function is NOT granted EXECUTE to application roles —
@@ -140,10 +141,14 @@ REVOKE EXECUTE ON FUNCTION app.set_app_context(UUID, TEXT, TEXT)
 -- audit.log_* wrappers which have fixed action codes.
 -- ============================================================
 
-SET LOCAL ROLE audit_writer;
+-- Switch to audit_owner to create functions in the audit schema.
+-- All REVOKE/GRANT on audit._insert_log happen while audit_owner still owns it;
+-- ownership is transferred to audit_writer last.
+SET LOCAL ROLE "audit_owner";
 
 CREATE OR REPLACE FUNCTION audit._insert_log(
     p_action_code TEXT,
+    p_log_id      UUID    DEFAULT uuidv7(),
     p_metadata    JSONB   DEFAULT NULL,
     p_vendor_id   UUID    DEFAULT NULL,
     p_license_id  UUID    DEFAULT NULL,
@@ -155,7 +160,6 @@ SECURITY DEFINER
 SET search_path TO audit, app, reference, pg_temp
 AS $$
 DECLARE
-    v_log_id    UUID;
     v_ip        TEXT;
     v_ua        TEXT;
 BEGIN
@@ -165,12 +169,21 @@ BEGIN
     v_ip := NULLIF(current_setting('app.ip_address', true), '');
     v_ua := NULLIF(current_setting('app.user_agent', true), '');
 
+    -- Safely cast v_ip to INET; if malformed, use NULL
+    BEGIN
+        v_ip := v_ip::INET;
+    EXCEPTION WHEN invalid_text_representation THEN
+        v_ip := NULL;
+    END;
+
     INSERT INTO audit."audit_logs" (
+        "id",
         "action_code",
         "ip_address",
         "user_agent",
         "metadata"
     ) VALUES (
+        p_log_id,
         p_action_code,
         v_ip::INET,
         v_ua,
@@ -185,7 +198,7 @@ BEGIN
             "vendor_id"
         )
         VALUES (
-            v_log_id,
+            p_log_id,
             p_vendor_id
         );
     END IF;
@@ -197,7 +210,7 @@ BEGIN
             "license_id"
         )
         VALUES (
-            v_log_id,
+            p_log_id,
             p_license_id
         );
     END IF;
@@ -205,18 +218,30 @@ BEGIN
     -- Session junction
     IF p_session_id IS NOT NULL THEN
         INSERT INTO audit."audit_log_sessions" ("audit_log_id", "session_id")
-        VALUES (v_log_id, p_session_id);
+        VALUES (p_log_id, p_session_id);
     END IF;
 END;
 $$;
 
-COMMENT ON FUNCTION audit._insert_log(TEXT, JSONB, UUID, UUID, UUID) IS
+COMMENT ON FUNCTION audit._insert_log(TEXT, UUID, JSONB, UUID, UUID, UUID) IS
     'Internal audit helper. Inserts a core audit_logs row and '
     'optional junction rows. Reads ip_address and user_agent from '
     'transaction-local config set by app.set_app_context. '
-    'SECURITY DEFINER — runs as audit_writer. Not granted to '
-    'application roles; call via typed audit.log_* wrappers only.';
+    'Owned by audit_owner (SECURITY DEFINER; body restricted to INSERTs, '
+    'search_path fixed). app_writer and app_deleter hold EXECUTE to '
+    'invoke it through the audit.log_* wrappers.';
 
+REVOKE EXECUTE ON FUNCTION audit._insert_log(TEXT, UUID, JSONB, UUID, UUID, UUID)
+    FROM PUBLIC;
+
+GRANT EXECUTE ON FUNCTION audit._insert_log(TEXT, UUID, JSONB, UUID, UUID, UUID)
+    TO app_writer, app_deleter;
+
+-- Revoke the default EXECUTE privilege from 01_roles.sql that
+-- inadvertently granted readers access to this SECURITY DEFINER function.
+-- audit_reader should not be able to execute write functions.
+REVOKE EXECUTE ON FUNCTION audit._insert_log(TEXT, UUID, JSONB, UUID, UUID, UUID)
+    FROM audit_reader;
 
 -- ============================================================
 -- Explicit-call audit functions
@@ -225,10 +250,9 @@ COMMENT ON FUNCTION audit._insert_log(TEXT, JSONB, UUID, UUID, UUID) IS
 -- the business-specific parameters relevant to that event.
 -- All functions delegate to audit._insert_log internally.
 --
--- SECURITY DEFINER on these functions is intentionally omitted —
--- they are owned by audit_writer and call audit._insert_log
--- which is itself SECURITY DEFINER. The privilege elevation
--- happens inside _insert_log, not here.
+-- Created and owned by audit_owner. No SECURITY DEFINER — they run
+-- as the invoker. The privilege elevation happens inside
+-- audit._insert_log (SECURITY DEFINER, owned by audit_owner), not here.
 -- ============================================================
 
 -- ------------------------------------------------------------
@@ -240,11 +264,9 @@ CREATE OR REPLACE FUNCTION audit.log_login_success(
 )
 RETURNS VOID
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO audit, app, reference, pg_temp
 AS $$
 BEGIN
-    audit._insert_log(
+    PERFORM audit._insert_log(
         p_action_code => 'LOGIN_SUCCESS',
         p_vendor_id   => p_vendor_id
     );
@@ -270,11 +292,9 @@ CREATE OR REPLACE FUNCTION audit.log_login_failed(
 )
 RETURNS VOID
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO audit, app, reference, pg_temp
 AS $$
 BEGIN
-    audit._insert_log(
+    PERFORM audit._insert_log(
         p_action_code => 'LOGIN_FAILED',
         p_vendor_id   => p_vendor_id
     );
@@ -297,11 +317,9 @@ CREATE OR REPLACE FUNCTION audit.log_token_refreshed(
 )
 RETURNS VOID
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO audit, app, reference, pg_temp
 AS $$
 BEGIN
-    audit._insert_log(
+    PERFORM audit._insert_log(
         p_action_code => 'TOKEN_REFRESHED',
         p_vendor_id   => p_vendor_id
     );
@@ -314,11 +332,10 @@ COMMENT ON FUNCTION audit.log_token_refreshed(UUID) IS
 -- ------------------------------------------------------------
 -- audit.log_heartbeat_error
 -- ------------------------------------------------------------
--- p_error_code must exist in reference.error_codes. The FK on
--- audit_logs.action_code enforces this at the DB layer, but
--- the error is surfaced as a FK violation. Application code
--- should validate p_error_code before calling this function
--- to produce a cleaner error message for the caller.
+-- p_error_code must exist in reference.error_codes. The value is
+-- stored in metadata JSONB with no FK constraint at the DB layer.
+-- Application code should validate p_error_code before calling
+-- this function to produce a cleaner error message for the caller.
 --
 -- Both session and license junction rows are recorded:
 -- querying "all audit events for license X" returns heartbeat
@@ -332,11 +349,9 @@ CREATE OR REPLACE FUNCTION audit.log_heartbeat_error(
 )
 RETURNS VOID
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO audit, app, reference, pg_temp
 AS $$
 BEGIN
-    audit._insert_log(
+    PERFORM audit._insert_log(
         p_action_code => 'HEARTBEAT_ERROR',
         p_metadata    => jsonb_build_object('error_code', p_error_code),
         p_session_id  => p_session_id,
@@ -357,7 +372,8 @@ COMMENT ON FUNCTION audit.log_heartbeat_error(UUID, UUID, TEXT) IS
 -- ============================================================
 -- Granted to app_writer and app_deleter only.
 -- Read-only roles have no business writing audit records.
--- audit._insert_log is intentionally excluded — internal only.
+-- audit._insert_log is granted separately above (still as
+-- superuser, after its ownership transfer to audit_writer).
 -- ============================================================
 
 GRANT EXECUTE ON FUNCTION audit.log_login_success(UUID)
