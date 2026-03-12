@@ -3,4 +3,4 @@ include_paths:
   - "migrations/**"
 exclude_paths:
   - ".github/**"
-  - "backend/tests/**"
+  - "**/tests/**"
