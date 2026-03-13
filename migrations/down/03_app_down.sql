@@ -46,13 +46,34 @@
 --   partition is added.
 --
 -- CASCADE POLICY
---   CASCADE is used only on app."heartbeats" to remove child
---   partitions. All other DROP TABLE statements omit CASCADE
---   so that any unexpected FK dependencies surface as errors
---   rather than silently cascading.
+--   Partition children (heartbeats_2026_q1 …)
+--   are automatically dropped when the partitioned parent is dropped
+--   in PostgreSQL — no CASCADE required. Omitting CASCADE ensures any
+--   unexpected FK dependencies on app."heartbeats" surface as errors
+--   rather than silently cascading to unrelated objects.
 -- ============================================================
 
 BEGIN;
+
+-- ============================================================
+-- Reverses the GRANT SELECT added in 03_app.sql.
+-- ============================================================
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader') THEN
+        IF EXISTS (
+            SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'app' AND c.relname = 'licenses'
+        ) THEN
+            REVOKE SELECT ON app."licenses" FROM audit_reader;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'app' AND c.relname = 'sessions'
+        ) THEN
+            REVOKE SELECT ON app."sessions" FROM audit_reader;
+        END IF;
+    END IF;
+END $$;
 
 -- ============================================================
 -- Drop view first (references base tables)
@@ -63,12 +84,15 @@ DROP VIEW IF EXISTS app."v_license_node_locked";
 -- ============================================================
 -- Drop app."heartbeats" (partitioned)
 -- ============================================================
--- CASCADE removes all quarterly partitions and the default
--- partition automatically. Indexes on the parent and all
--- child partitions are also removed by CASCADE.
+-- PostgreSQL automatically drops all child partitions
+-- (heartbeats_2026_q1 … heartbeats_2027_q1, heartbeats_default)
+-- and their indexes when the partitioned parent is dropped.
+-- CASCADE is intentionally omitted — any unexpected FK
+-- dependency would surface as an error rather than silently
+-- cascading to unrelated objects.
 -- ============================================================
 
-DROP TABLE IF EXISTS app."heartbeats" CASCADE;
+DROP TABLE IF EXISTS app."heartbeats";
 
 -- ============================================================
 -- Drop remaining business tables

@@ -456,7 +456,8 @@ END $$;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE VIEW app.v_license_node_locked AS
+    CREATE VIEW app.v_license_node_locked
+        WITH (security_invoker=true) AS
         SELECT
             -- Base license columns
             app."licenses"."id",
@@ -486,7 +487,22 @@ COMMENT ON VIEW app.v_license_node_locked IS
     'are visible. All application writes must target this view; '
     'the INSTEAD OF trigger in 07_audit_triggers.sql routes DML '
     'to the base tables and emits unified audit entries. '
+    'security_invoker=true ensures RLS policies are applied with the '
+    'calling role''s credentials, preventing the view owner (app_owner) '
+    'from silently bypassing row-level security. '
     'Direct writes to app."licenses" or app."node_locked_license_data" '
     'bypass audit logging and are restricted to app_owner only.';
+
+-- ============================================================
+-- Grants to audit_reader on app tables
+-- ============================================================
+-- audit_reader needs SELECT on these tables so that the RLS
+-- delegation subqueries in audit_log_licenses_select_own and
+-- audit_log_sessions_select_own can evaluate. PostgreSQL still
+-- applies the app.*_select_own RLS policies inside those
+-- subqueries, enforcing tenant isolation.
+-- ============================================================
+GRANT SELECT ON app."licenses" TO audit_reader;
+GRANT SELECT ON app."sessions" TO audit_reader;
 
 COMMIT;

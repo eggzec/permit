@@ -136,18 +136,17 @@ def test_license_key_unique_enforced(superconn):
         ),
     ],
 )
-def test_audit_junction_composite_pk(conn_url, table_name, expected_cols):
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT array_agg(a.attname ORDER BY u.ord) "
-            "FROM pg_constraint c "
-            "JOIN pg_class t ON t.oid = c.conrelid "
-            "JOIN pg_namespace n ON n.oid = t.relnamespace "
-            "JOIN unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord) ON TRUE "
-            "JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum "
-            "WHERE c.contype = 'p' AND n.nspname = 'audit' AND t.relname = %s",
-            (table_name,),
-        ).fetchone()
+def test_audit_junction_composite_pk(superconn, table_name, expected_cols):
+    row = superconn.execute(
+        "SELECT array_agg(a.attname ORDER BY u.ord) "
+        "FROM pg_constraint c "
+        "JOIN pg_class t ON t.oid = c.conrelid "
+        "JOIN pg_namespace n ON n.oid = t.relnamespace "
+        "JOIN unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord) ON TRUE "
+        "JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum "
+        "WHERE c.contype = 'p' AND n.nspname = 'audit' AND t.relname = %s",
+        (table_name,),
+    ).fetchone()
     assert row is not None and row[0] is not None, f"PK not found on audit.{table_name}"
     assert row[0] == expected_cols, (
         f"audit.{table_name} PK columns are {row[0]}, expected {expected_cols}"

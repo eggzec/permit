@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import uuid
 
-import psycopg
 import pytest
 
 pytestmark = [
@@ -21,12 +20,11 @@ pytestmark = [
         pytest.param("reference", id="reference"),
     ],
 )
-def test_schema_exists(conn_url, schema):
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM pg_namespace WHERE nspname = %s",
-            (schema,),
-        ).fetchone()
+def test_schema_exists(superconn, schema):
+    row = superconn.execute(
+        "SELECT 1 FROM pg_namespace WHERE nspname = %s",
+        (schema,),
+    ).fetchone()
     assert row is not None, f"Schema '{schema}' does not exist"
 
 
@@ -40,14 +38,13 @@ def test_schema_exists(conn_url, schema):
         pytest.param("session_statuses", id="session_statuses"),
     ],
 )
-def test_reference_table_exists(conn_url, table):
+def test_reference_table_exists(superconn, table):
     schema_name = "reference"
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema=%s AND table_name=%s",
-            (schema_name, table),
-        ).fetchone()
+    row = superconn.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema=%s AND table_name=%s",
+        (schema_name, table),
+    ).fetchone()
     assert row is not None, f"Table reference.{table} does not exist"
 
 
@@ -62,15 +59,14 @@ def test_reference_table_exists(conn_url, table):
         pytest.param("v_license_node_locked", id="v_license_node_locked_view"),
     ],
 )
-def test_app_relation_exists(conn_url, table):
+def test_app_relation_exists(superconn, table):
     schema_name = "app"
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM pg_class c "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname=%s AND c.relname=%s AND c.relkind IN ('r','p','v')",
-            (schema_name, table),
-        ).fetchone()
+    row = superconn.execute(
+        "SELECT 1 FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid=c.relnamespace "
+        "WHERE n.nspname=%s AND c.relname=%s AND c.relkind IN ('r','p','v')",
+        (schema_name, table),
+    ).fetchone()
     assert row is not None, f"Relation app.{table} does not exist"
 
 
@@ -83,14 +79,13 @@ def test_app_relation_exists(conn_url, table):
         pytest.param("audit_logs", id="audit_logs"),
     ],
 )
-def test_audit_table_exists(conn_url, table):
+def test_audit_table_exists(superconn, table):
     schema_name = "audit"
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema=%s AND table_name=%s",
-            (schema_name, table),
-        ).fetchone()
+    row = superconn.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema=%s AND table_name=%s",
+        (schema_name, table),
+    ).fetchone()
     assert row is not None, f"Table audit.{table} does not exist"
 
 
@@ -105,23 +100,24 @@ def test_audit_table_exists(conn_url, table):
         pytest.param("heartbeats_default", id="default"),
     ],
 )
-def test_heartbeat_partition_exists(conn_url, partition):
+def test_heartbeat_partition_exists(superconn, partition):
     schema_name = "app"
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM pg_class c "
-            "JOIN pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname=%s AND c.relkind='r' "
-            "AND c.relispartition=true AND c.relname=%s",
-            (schema_name, partition),
-        ).fetchone()
+    row = superconn.execute(
+        "SELECT 1 FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid=c.relnamespace "
+        "WHERE n.nspname=%s AND c.relkind='r' "
+        "AND c.relispartition=true AND c.relname=%s",
+        (schema_name, partition),
+    ).fetchone()
     assert row is not None, f"Heartbeat partition '{partition}' does not exist"
 
 
 def test_vendors_id_defaults_to_uuidv7(superconn):
     with superconn.transaction(force_rollback=True):
-        superconn.execute("SET LOCAL ROLE app_owner")
-        superconn.execute('ALTER TABLE app."vendors" DISABLE TRIGGER vendors_audit_tr')
+        superconn.execute(
+            "SET LOCAL ROLE app_owner; "
+            'ALTER TABLE app."vendors" DISABLE TRIGGER vendors_audit_tr'
+        )
         email = "uuid7-check@example.com"
         password_hash = "hash"
         generated_id = superconn.execute(
@@ -129,7 +125,6 @@ def test_vendors_id_defaults_to_uuidv7(superconn):
             "VALUES (%s,%s) RETURNING id",
             (email, password_hash),
         ).fetchone()[0]
-        superconn.execute('ALTER TABLE app."vendors" ENABLE TRIGGER vendors_audit_tr')
     assert isinstance(generated_id, uuid.UUID), (
         f"Expected generated vendor id to be uuid.UUID, got {type(generated_id).__name__}"
     )

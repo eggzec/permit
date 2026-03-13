@@ -50,7 +50,7 @@
 --
 -- ISOLATION GUARANTEE
 --   A vendor can only see/modify records where vendor_id
---   matches current_setting('app.vendor_id', true)::UUID.
+--   matches NULLIF(current_setting('app.vendor_id', true), '')::UUID.
 --   If app.vendor_id is not set the condition evaluates to
 --   vendor_id = NULL which returns zero rows (NULL != any UUID).
 -- ============================================================
@@ -83,7 +83,7 @@ DO $$ BEGIN
     CREATE POLICY "licenses_select_own" ON app."licenses"
         FOR SELECT
         USING (
-            vendor_id = current_setting('app.vendor_id', true)::UUID
+            vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
         );
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'policy "licenses_select_own" already exists, skipping';
@@ -93,7 +93,7 @@ DO $$ BEGIN
     CREATE POLICY "licenses_insert_own" ON app."licenses"
         FOR INSERT
         WITH CHECK (
-            vendor_id = current_setting('app.vendor_id', true)::UUID
+            vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
         );
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'policy "licenses_insert_own" already exists, skipping';
@@ -103,10 +103,10 @@ DO $$ BEGIN
     CREATE POLICY "licenses_update_own" ON app."licenses"
         FOR UPDATE
         USING (
-            vendor_id = current_setting('app.vendor_id', true)::UUID
+            vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
         )
         WITH CHECK (
-            vendor_id = current_setting('app.vendor_id', true)::UUID
+            vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
         );
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'policy "licenses_update_own" already exists, skipping';
@@ -116,7 +116,7 @@ DO $$ BEGIN
     CREATE POLICY "licenses_delete_own" ON app."licenses"
         FOR DELETE
         USING (
-            vendor_id = current_setting('app.vendor_id', true)::UUID
+            vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
         );
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'policy "licenses_delete_own" already exists, skipping';
@@ -133,7 +133,7 @@ DO $$ BEGIN
             EXISTS (
                 SELECT 1 FROM app."licenses" l
                 WHERE l."id" = "license_id"
-                  AND l."vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND l."vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -147,7 +147,7 @@ DO $$ BEGIN
             EXISTS (
                 SELECT 1 FROM app."licenses" l
                 WHERE l."id" = "license_id"
-                  AND l."vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND l."vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -161,14 +161,14 @@ DO $$ BEGIN
             EXISTS (
                 SELECT 1 FROM app."licenses" l
                 WHERE l."id" = "license_id"
-                  AND l."vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND l."vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         )
         WITH CHECK (
             EXISTS (
                 SELECT 1 FROM app."licenses" l
                 WHERE l."id" = "license_id"
-                  AND l."vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND l."vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -182,7 +182,7 @@ DO $$ BEGIN
             EXISTS (
                 SELECT 1 FROM app."licenses" l
                 WHERE l."id" = "license_id"
-                  AND l."vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND l."vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -201,7 +201,7 @@ DO $$ BEGIN
                 SELECT 1
                 FROM app."licenses" l
                 WHERE l.id = app."sessions".license_id
-                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                  AND l.vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -215,7 +215,7 @@ DO $$ BEGIN
             EXISTS (
                 SELECT 1 FROM app."licenses"
                 WHERE "id" = app."sessions"."license_id"
-                  AND "vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND "vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -229,14 +229,14 @@ DO $$ BEGIN
             EXISTS (
                 SELECT 1 FROM app."licenses"
                 WHERE "id" = app."sessions"."license_id"
-                  AND "vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND "vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         )
         WITH CHECK (
             EXISTS (
                 SELECT 1 FROM app."licenses"
                 WHERE "id" = app."sessions"."license_id"
-                  AND "vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND "vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -250,7 +250,7 @@ DO $$ BEGIN
             EXISTS (
                 SELECT 1 FROM app."licenses"
                 WHERE "id" = app."sessions"."license_id"
-                  AND "vendor_id" = current_setting('app.vendor_id', true)::UUID
+                  AND "vendor_id" = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -270,7 +270,7 @@ DO $$ BEGIN
                 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
                 WHERE s.id = app."heartbeats".session_id
-                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                  AND l.vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -285,7 +285,7 @@ DO $$ BEGIN
                 SELECT 1 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
                 WHERE s.id = app."heartbeats"."session_id"
-                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                  AND l.vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -300,7 +300,7 @@ DO $$ BEGIN
                 SELECT 1 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
                 WHERE s.id = app."heartbeats"."session_id"
-                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                  AND l.vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         )
         WITH CHECK (
@@ -308,7 +308,7 @@ DO $$ BEGIN
                 SELECT 1 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
                 WHERE s.id = app."heartbeats"."session_id"
-                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                  AND l.vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -323,7 +323,7 @@ DO $$ BEGIN
                 SELECT 1 FROM app."sessions" s
                 JOIN app."licenses" l ON l.id = s.license_id
                 WHERE s.id = app."heartbeats"."session_id"
-                  AND l.vendor_id = current_setting('app.vendor_id', true)::UUID
+                  AND l.vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -413,7 +413,7 @@ DO $$ BEGIN
             EXISTS (
                 SELECT 1 FROM audit."audit_log_vendor_actors"
                 WHERE audit_log_id = audit."audit_logs".id
-                  AND vendor_id = current_setting('app.vendor_id', true)::UUID
+                  AND vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
             )
         );
 EXCEPTION WHEN duplicate_object THEN
@@ -430,7 +430,7 @@ DO $$ BEGIN
     CREATE POLICY "audit_log_vendor_actors_select_own" ON audit."audit_log_vendor_actors"
         FOR SELECT
         USING (
-            vendor_id = current_setting('app.vendor_id', true)::UUID
+            vendor_id = NULLIF(current_setting('app.vendor_id', true), '')::UUID
         );
 EXCEPTION WHEN duplicate_object THEN
     RAISE NOTICE 'policy "audit_log_vendor_actors_select_own" already exists, skipping';

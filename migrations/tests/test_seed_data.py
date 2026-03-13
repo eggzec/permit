@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import psycopg
 import pytest
 from psycopg import sql
 
@@ -27,27 +26,25 @@ pytestmark = [pytest.mark.seed_data, pytest.mark.reference]
         ),
     ],
 )
-def test_seed_data_codes(conn_url, table_name, expected_codes):
-    with psycopg.connect(conn_url) as conn:
-        codes = [
-            r[0]
-            for r in conn.execute(
-                sql.SQL("SELECT code FROM reference.{} ORDER BY code").format(
-                    sql.Identifier(table_name)
-                )
-            ).fetchall()
-        ]
+def test_seed_data_codes(superconn, table_name, expected_codes):
+    codes = [
+        r[0]
+        for r in superconn.execute(
+            sql.SQL("SELECT code FROM reference.{} ORDER BY code").format(
+                sql.Identifier(table_name)
+            )
+        ).fetchall()
+    ]
     expected = sorted(expected_codes)
     assert codes == expected, (
         f"Expected seed codes for reference.{table_name} to be {expected}, got {codes}"
     )
 
 
-def test_error_codes_seed_count(conn_url):
-    with psycopg.connect(conn_url) as conn:
-        count = conn.execute('SELECT COUNT(*) FROM reference."error_codes"').fetchone()[
-            0
-        ]
+def test_error_codes_seed_count(superconn):
+    count = superconn.execute(
+        'SELECT COUNT(*) FROM reference."error_codes"'
+    ).fetchone()[0]
     assert count == 12, f"Expected 12 seeded error_codes rows, got {count}"
 
 
@@ -58,13 +55,10 @@ def test_error_codes_seed_count(conn_url):
         pytest.param("actions", 15, id="actions"),
     ],
 )
-def test_seed_count(conn_url, table_name, expected_count):
-    with psycopg.connect(conn_url) as conn:
-        count = conn.execute(
-            sql.SQL("SELECT COUNT(*) FROM reference.{}").format(
-                sql.Identifier(table_name)
-            )
-        ).fetchone()[0]
+def test_seed_count(superconn, table_name, expected_count):
+    count = superconn.execute(
+        sql.SQL("SELECT COUNT(*) FROM reference.{}").format(sql.Identifier(table_name))
+    ).fetchone()[0]
     assert count == expected_count, (
         f"Expected {expected_count} seeded rows in reference.{table_name}, got {count}"
     )
@@ -90,10 +84,9 @@ def test_seed_count(conn_url, table_name, expected_count):
         pytest.param("CLEANED", id="cleaned"),
     ],
 )
-def test_action_code_present(conn_url, code):
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            'SELECT 1 FROM reference."actions" WHERE code = %s',
-            (code,),
-        ).fetchone()
+def test_action_code_present(superconn, code):
+    row = superconn.execute(
+        'SELECT 1 FROM reference."actions" WHERE code = %s',
+        (code,),
+    ).fetchone()
     assert row is not None, f"Action code '{code}' not found in reference.actions"

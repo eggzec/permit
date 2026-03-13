@@ -414,18 +414,22 @@ BEGIN
     v_vendor_id  := NULLIF(current_setting('app.vendor_id', true), '')::UUID;
     v_license_id := OLD."id";
 
+    -- Emit audit entry BEFORE deleting rows.
+    -- p_license_id is intentionally omitted: inserting into audit_log_licenses
+    -- while the license still exists (FK satisfied) would then prevent the
+    -- subsequent DELETE on app."licenses" due to the ON DELETE RESTRICT FK.
+    -- audit_log_vendor_actors still records who performed the deletion.
+    PERFORM audit._insert_log(
+        p_action_code => 'DELETED',
+        p_vendor_id   => v_vendor_id
+    );
+
     -- Delete extension row first (FK requires this order)
     DELETE FROM app."node_locked_license_data"
     WHERE "license_id" = v_license_id;
 
     DELETE FROM app."licenses"
     WHERE "id" = v_license_id;
-
-    PERFORM audit._insert_log(
-        p_action_code => 'DELETED',
-        p_vendor_id   => v_vendor_id,
-        p_license_id  => v_license_id
-    );
 
     RETURN OLD;
 END;
@@ -434,9 +438,10 @@ $$;
 COMMENT ON FUNCTION audit.trg_v_license_node_locked_delete() IS
     'INSTEAD OF DELETE trigger on app.v_license_node_locked. '
     'SECURITY INVOKER, owned by audit_owner. Fires only when invoked by '
-    'app_deleter (the only role with DELETE on the view). Deletes extension '
-    'row first (FK order), then base license row. '
-    'Emits DELETED audit entry.';
+    'app_deleter (the only role with DELETE on the view). '
+    'Emits DELETED audit entry without license_id to avoid FK conflicts; '
+    'audit_log_vendor_actors still records the actor. '
+    'Then deletes extension row and base license row in FK-safe order.';
 
 -- All ACL changes must happen while audit_owner still owns the function.
 REVOKE EXECUTE ON FUNCTION audit.trg_v_license_node_locked_delete()

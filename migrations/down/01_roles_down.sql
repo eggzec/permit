@@ -145,6 +145,18 @@ DO $$ BEGIN
     END IF;
 END $$;
 
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_namespace WHERE nspname = 'audit'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_deleter'
+    ) THEN
+        REVOKE USAGE ON SCHEMA audit FROM app_writer, app_deleter;
+    END IF;
+END $$;
+
 -- ============================================================
 -- REVOKE DEFAULT PRIVILEGES
 -- ============================================================

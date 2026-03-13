@@ -29,18 +29,27 @@ def test_audit_junction_update_blocked(superconn):
     with superconn.transaction(force_rollback=True):
         vid = insert_vendor(superconn, "imm-junction@example.com")
         log_id = make_audit_log(superconn)
-        superconn.execute("SET LOCAL ROLE audit_owner")
-        superconn.execute(
-            'INSERT INTO audit."audit_log_vendor_actors" (audit_log_id, vendor_id) VALUES (%s,%s)',
-            (log_id, vid),
-        )
-        superconn.execute("RESET ROLE")
+        with psycopg.ClientCursor(superconn) as cur:
+            cur.execute(
+                "SET LOCAL ROLE audit_owner; "
+                'INSERT INTO audit."audit_log_vendor_actors" (audit_log_id, vendor_id) VALUES (%s,%s)',
+                (log_id, vid),
+            )
         new_vendor_id = insert_vendor(superconn, "imm-junction-2@example.com")
+        superconn.execute("SET LOCAL ROLE audit_reader")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             superconn.execute(
                 'UPDATE audit."audit_log_vendor_actors" SET vendor_id=%s WHERE audit_log_id=%s',
                 (new_vendor_id, log_id),
             )
+
+
+def test_log_login_success_invocation_blocked_for_audit_reader(superconn):
+    with superconn.transaction(force_rollback=True):
+        vendor_id = insert_vendor(superconn, "login-success-audit@example.com")
+        superconn.execute("SET LOCAL ROLE audit_reader")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            superconn.execute("SELECT audit.log_login_success(%s)", (vendor_id,))
 
 
 def test_log_heartbeat_error_invocation_blocked_for_audit_reader(superconn):
@@ -61,3 +70,11 @@ def test_log_login_failed_invocation_blocked_for_audit_reader(superconn):
         superconn.execute("SET LOCAL ROLE audit_reader")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             superconn.execute("SELECT audit.log_login_failed(NULL)")
+
+
+def test_log_token_refreshed_invocation_blocked_for_audit_reader(superconn):
+    with superconn.transaction(force_rollback=True):
+        vendor_id = insert_vendor(superconn, "token-refresh-audit@example.com")
+        superconn.execute("SET LOCAL ROLE audit_reader")
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            superconn.execute("SELECT audit.log_token_refreshed(%s)", (vendor_id,))

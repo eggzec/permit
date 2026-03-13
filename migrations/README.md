@@ -43,7 +43,7 @@ ALTER ROLE <login_user> SET role TO 'app_reader_rls';
 | `reference_writer` | reference | INSERT, UPDATE on tables; USAGE/SELECT on sequences; EXECUTE on functions |
 | `audit_owner` | audit | Owns all objects |
 | `audit_writer` | audit | INSERT on tables; USAGE/SELECT on sequences; EXECUTE on functions |
-| `audit_reader` | audit | SELECT on tables; EXECUTE on functions |
+| `audit_reader` | audit | SELECT on audit tables, app.licenses, app.sessions; EXECUTE on app.set_app_context only. EXECUTE on audit._insert_log and all audit.log_* wrappers explicitly revoked |
 | `app_owner` | app | Owns all objects |
 | `app_reader_rls` | app | SELECT on tables/sequences (RLS applies); EXECUTE on functions |
 | `app_reader_bypass` | app | SELECT on tables/sequences (BYPASSRLS); EXECUTE on functions |
@@ -78,6 +78,16 @@ docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/d
 docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/02_reference_down.sql
 docker compose exec db psql -U postgres -d laas -f /docker-entrypoint-initdb.d/down/01_roles_down.sql
 ```
+
+---
+
+## RLS Design Notes
+
+### `app.vendors` — Intentionally Excluded from RLS
+
+`app.vendors` is the only table in the `app` schema **not** covered by Row-Level Security. This is intentional: vendor isolation via RLS relies on `app.vendor_id` being set in the transaction context (via `app.set_app_context()`), but that call itself requires reading `app.vendors` to authenticate the vendor first. Enabling RLS on `app.vendors` would create an unresolvable circular dependency — you could never authenticate because authentication requires reading a table that requires authentication to read.
+
+Application code is responsible for ensuring that reads of `app.vendors` are scoped correctly (e.g. querying `WHERE email = $1` during login rather than selecting all rows). All downstream tables (`licenses`, `sessions`, `heartbeats`, etc.) are RLS-protected and are automatically filtered once the vendor context is set.
 
 ---
 

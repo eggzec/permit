@@ -54,16 +54,18 @@ def test_vendor_isolation_insert(superconn):
         superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
 
         superconn.execute(
-            'INSERT INTO app."licenses" ("vendor_id","license_status_code","max_grace_secs") '
-            "VALUES (%s,%s,%s)",
-            (vendor_a_id, "ACTIVE", 60),
+            'INSERT INTO app."v_license_node_locked" '
+            '("vendor_id","license_status_code","max_grace_secs","license_key") '
+            "VALUES (%s,%s,%s,%s)",
+            (vendor_a_id, "ACTIVE", 60, "key_insert_77_a"),
         )
 
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             superconn.execute(
-                'INSERT INTO app."licenses" ("vendor_id","license_status_code","max_grace_secs") '
-                "VALUES (%s,%s,%s)",
-                (vendor_b_id, "ACTIVE", 60),
+                'INSERT INTO app."v_license_node_locked" '
+                '("vendor_id","license_status_code","max_grace_secs","license_key") '
+                "VALUES (%s,%s,%s,%s)",
+                (vendor_b_id, "ACTIVE", 60, "key_insert_77_b"),
             )
 
 
@@ -73,17 +75,21 @@ def test_vendor_isolation_update(superconn):
         vendor_b_id = insert_vendor(superconn, "vendor_b_78@example.com")
         license_a_id = insert_license(superconn, vendor_a_id)
         license_b_id = insert_license(superconn, vendor_b_id)
+        insert_node_locked(superconn, license_a_id, "key_upd_78_a")
+        insert_node_locked(superconn, license_b_id, "key_upd_78_b")
 
         superconn.execute("SET LOCAL ROLE app_writer")
         superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
 
         cur = superconn.execute(
-            'UPDATE app."licenses" SET updated_at=NOW() WHERE id=%s', (license_a_id,)
+            'UPDATE app."v_license_node_locked" SET metadata=%s WHERE id=%s',
+            ('{"owner": "a"}', license_a_id),
         )
         assert cur.rowcount == 1, "Expected update on own license to succeed"
 
         cur = superconn.execute(
-            'UPDATE app."licenses" SET updated_at=NOW() WHERE id=%s', (license_b_id,)
+            'UPDATE app."v_license_node_locked" SET metadata=%s WHERE id=%s',
+            ('{"owner": "cross"}', license_b_id),
         )
         assert cur.rowcount == 0, (
             f"Expected update on vendor {vendor_b_id} license {license_b_id} to affect 0 rows, got {cur.rowcount}"
@@ -96,19 +102,21 @@ def test_vendor_isolation_delete(superconn):
         vendor_b_id = insert_vendor(superconn, "vendor_b_79@example.com")
         license_a_id = insert_license(superconn, vendor_a_id)
         license_b_id = insert_license(superconn, vendor_b_id)
+        insert_node_locked(superconn, license_a_id, "key_del_79_a")
+        insert_node_locked(superconn, license_b_id, "key_del_79_b")
 
         superconn.execute("SET LOCAL ROLE app_deleter")
         superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
 
         cur = superconn.execute(
-            'DELETE FROM app."licenses" WHERE id=%s', (license_a_id,)
+            'DELETE FROM app."v_license_node_locked" WHERE id=%s', (license_a_id,)
         )
         assert cur.rowcount == 1, (
             f"Expected delete of own license {license_a_id} to affect 1 row, got {cur.rowcount}"
         )
 
         cur = superconn.execute(
-            'DELETE FROM app."licenses" WHERE id=%s', (license_b_id,)
+            'DELETE FROM app."v_license_node_locked" WHERE id=%s', (license_b_id,)
         )
         assert cur.rowcount == 0, (
             f"Expected delete of vendor {vendor_b_id} license {license_b_id} to affect 0 rows, got {cur.rowcount}"
@@ -275,13 +283,14 @@ def test_rls_blocks_vendor_id_hijack_via_update(superconn):
         vendor_a_id = insert_vendor(superconn, "vendor_a_86@example.com")
         vendor_b_id = insert_vendor(superconn, "vendor_b_86@example.com")
         license_a_id = insert_license(superconn, vendor_a_id)
+        insert_node_locked(superconn, license_a_id, "key_hijack_86")
 
         superconn.execute("SET LOCAL ROLE app_writer")
         superconn.execute("SELECT app.set_app_context(%s)", (vendor_a_id,))
 
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             superconn.execute(
-                'UPDATE app."licenses" SET vendor_id=%s WHERE id=%s',
+                'UPDATE app."v_license_node_locked" SET vendor_id=%s WHERE id=%s',
                 (vendor_b_id, license_a_id),
             )
 
@@ -300,4 +309,28 @@ def test_rls_no_leakage_via_app_owner_role_switch(superconn):
         ).fetchone()[0]
         assert count == 2, (
             f"Expected app_owner role to see 2 licenses across vendors, got {count}"
+        )
+
+
+def test_rls_empty_string_vendor_id_returns_no_rows(superconn):
+    """Regression guard for NULLIF fix in 06_rls.sql.
+
+    Without NULLIF, PostgreSQL returns '' (empty string) when app.vendor_id has
+    been set to '' inside the session. Casting '' directly to UUID raises
+    invalid_text_representation instead of silently returning zero rows.
+    NULLIF converts '' to NULL so the policy evaluates safely.
+    """
+    with superconn.transaction(force_rollback=True):
+        vendor_id = insert_vendor(superconn, "nullif-rls-test@example.com")
+        insert_license(superconn, vendor_id)
+
+        # Switch to tenant reader and set an empty-string context (simulates
+        # an unset / cleared vendor_id — NULLIF in 06_rls.sql guards this).
+        superconn.execute(
+            "SET LOCAL ROLE app_reader_rls; "
+            "SELECT set_config('app.vendor_id', '', true)"
+        )
+        count = superconn.execute('SELECT COUNT(*) FROM app."licenses"').fetchone()[0]
+        assert count == 0, (
+            f"Expected 0 rows with empty-string vendor_id (NULLIF guard), got {count}"
         )

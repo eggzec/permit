@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import psycopg
+import psycopg.rows
 import pytest
 
 pytestmark = [pytest.mark.indexes, pytest.mark.app, pytest.mark.audit]
@@ -26,20 +27,18 @@ pytestmark = [pytest.mark.indexes, pytest.mark.app, pytest.mark.audit]
         ),
     ],
 )
-def test_index_exists(conn_url, schema, table, index_name):
-    with psycopg.connect(conn_url) as conn:
-        row = conn.execute(
-            "SELECT indexname FROM pg_indexes "
-            "WHERE schemaname=%s AND tablename=%s AND indexname=%s",
-            (schema, table, index_name),
-        ).fetchone()
+def test_index_exists(superconn, schema, table, index_name):
+    row = superconn.execute(
+        "SELECT indexname FROM pg_indexes "
+        "WHERE schemaname=%s AND tablename=%s AND indexname=%s",
+        (schema, table, index_name),
+    ).fetchone()
     assert row is not None, f"Index {index_name} missing on {schema}.{table}"
 
 
-def test_heartbeats_brin_index_type(conn_url):
-    with psycopg.connect(conn_url) as conn:
-        conn.row_factory = psycopg.rows.dict_row
-        row = conn.execute(
+def test_heartbeats_brin_index_type(superconn):
+    with superconn.cursor(row_factory=psycopg.rows.dict_row) as cur:
+        row = cur.execute(
             "SELECT i.relname AS index_name, am.amname AS am_name "
             "FROM pg_index ix "
             "JOIN pg_class i ON i.oid=ix.indexrelid "

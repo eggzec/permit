@@ -388,4 +388,17 @@ GRANT EXECUTE ON FUNCTION audit.log_token_refreshed(UUID)
 GRANT EXECUTE ON FUNCTION audit.log_heartbeat_error(UUID, UUID, TEXT)
     TO app_writer, app_deleter;
 
+-- Explicit deny: audit_reader must not call audit-write functions.
+-- audit._insert_log is already revoked above; these ensure the
+-- public-facing wrappers are also explicitly closed, providing
+-- a clear privilege boundary at the API layer.
+REVOKE EXECUTE ON FUNCTION audit.log_login_success(UUID)
+    FROM audit_reader;
+REVOKE EXECUTE ON FUNCTION audit.log_login_failed(UUID)
+    FROM audit_reader;
+REVOKE EXECUTE ON FUNCTION audit.log_token_refreshed(UUID)
+    FROM audit_reader;
+REVOKE EXECUTE ON FUNCTION audit.log_heartbeat_error(UUID, UUID, TEXT)
+    FROM audit_reader;
+
 COMMIT;

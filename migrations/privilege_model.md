@@ -90,11 +90,11 @@ All table-level privileges come from `ALTER DEFAULT PRIVILEGES` set in `01_roles
 | `reference.error_codes` | `SELECT` → `reference_reader`; `INSERT` → `reference_writer`; `REFERENCES` → `app_owner`, `audit_owner` | — |
 | `reference.actions` | `SELECT` → `reference_reader`; `INSERT` → `reference_writer`; `REFERENCES` → `app_owner`, `audit_owner` | — |
 | `app.vendors` | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | — |
-| `app.licenses` | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | — |
+| `app.licenses` | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | `SELECT` → `audit_reader` (required for `audit_log_licenses_select_own` RLS delegation; see §4.2) |
 | `app.node_locked_license_data` | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | — |
-| `app.sessions` | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | — |
+| `app.sessions` | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | `SELECT` → `audit_reader` (required for `audit_log_sessions_select_own` RLS delegation; see §4.2) |
 | `app.heartbeats` *(+ 6 partition children)* | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | — |
-| `app.v_license_node_locked` *(view)* | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | — |
+| `app.v_license_node_locked` *(view, security_invoker=true)* | `SELECT` → `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter`; `INSERT`, `UPDATE` → `app_writer`; `DELETE` → `app_deleter`; `REFERENCES` → `audit_owner` | — |
 | `audit.audit_logs` | `INSERT` → `audit_writer`; `SELECT` → `audit_reader` | — |
 | `audit.audit_log_vendor_actors` | `INSERT` → `audit_writer`; `SELECT` → `audit_reader` | — |
 | `audit.audit_log_licenses` | `INSERT` → `audit_writer`; `SELECT` → `audit_reader` | — |
@@ -111,10 +111,10 @@ Schema-wide `REVOKE EXECUTE FROM PUBLIC` for all functions is covered in §2.3 a
 | `app.set_app_context(UUID, TEXT, TEXT)` | `app_owner` | INVOKER | `app_reader_rls`, `app_reader_bypass`, `app_writer`, `app_deleter` | `audit_reader` | Sets tx-local `app.vendor_id`, `app.ip_address`, `app.user_agent` for RLS and audit |
 | `audit.prevent_audit_update_delete()` | `audit_owner` | SECURITY DEFINER; `search_path` fixed | `audit_writer`, `audit_reader` | — | Raises exception on any `UPDATE`/`DELETE` on audit tables; trigger-only |
 | `audit._insert_log(TEXT, UUID, JSONB, UUID, UUID, UUID)` | `audit_owner` | SECURITY DEFINER; `search_path` fixed | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` \| ~~`audit_reader`~~ | Writes `audit_logs` row + optional junction rows; reads ip/user_agent from tx context. Body is INSERT-only; broader audit_owner scope is safe in practice. |
-| `audit.log_login_success(UUID)` | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` | Emits `LOGIN_SUCCESS` |
-| `audit.log_login_failed(UUID)` | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` | Emits `LOGIN_FAILED`; `p_vendor_id` nullable |
-| `audit.log_token_refreshed(UUID)` | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` | Emits `TOKEN_REFRESHED` |
-| `audit.log_heartbeat_error(UUID, UUID, TEXT)` | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` | Emits `HEARTBEAT_ERROR` with session + license junctions |
+| `audit.log_login_success(UUID)` | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` \| ~~`audit_reader`~~ | Emits `LOGIN_SUCCESS` |
+| `audit.log_login_failed(UUID)` | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` \| ~~`audit_reader`~~ | Emits `LOGIN_FAILED`; `p_vendor_id` nullable |
+| `audit.log_token_refreshed(UUID)` | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` \| ~~`audit_reader`~~ | Emits `TOKEN_REFRESHED` |
+| `audit.log_heartbeat_error(UUID, UUID, TEXT)` | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | `app_writer`, `app_deleter` \| ~~`audit_reader`~~ | Emits `HEARTBEAT_ERROR` with session + license junctions |
 | `audit.trg_vendors_audit()` *(trigger fn)* | `audit_owner` | INVOKER | `audit_writer`, `audit_reader` | — | AFTER INSERT/UPDATE on `app.vendors`; emits SIGNUP, DELETED, PASSWORD_CHANGED |
 | `audit.trg_v_license_node_locked_write()` *(trigger fn)* | `audit_owner` | INVOKER; `search_path` fixed | `audit_writer`, `audit_reader` | ~~`audit_reader`~~ | INSTEAD OF INSERT/UPDATE on `app.v_license_node_locked`; routes to base tables; emits CREATED, DELETED, REVOKED, CONFIG_UPDATED, MODIFIED. Safe as INVOKER: only `app_writer` holds INSERT/UPDATE on the view. |
 | `audit.trg_v_license_node_locked_delete()` *(trigger fn)* | `audit_owner` | INVOKER; `search_path` fixed | `audit_writer`, `audit_reader` | ~~`audit_reader`~~ | INSTEAD OF DELETE on `app.v_license_node_locked`; deletes extension→base; emits DELETED. Safe as INVOKER: only `app_deleter` holds DELETE on the view. |
@@ -141,8 +141,8 @@ Each table has 4 policies covering all DML: `SELECT` (`USING`), `INSERT` (`WITH 
 |---|---:|---|
 | `audit.audit_logs` | 2 | Insert allowed to `audit_writer`; select only if vendor is in `audit_log_vendor_actors` |
 | `audit.audit_log_vendor_actors` | 2 | Insert allowed to `audit_writer`; select direct vendor equality |
-| `audit.audit_log_licenses` | 2 | Insert allowed to `audit_writer`; select delegated via `app.licenses` RLS |
-| `audit.audit_log_sessions` | 2 | Insert allowed to `audit_writer`; select delegated via `app.sessions` RLS |
+| `audit.audit_log_licenses` | 2 | Insert allowed to `audit_writer`; select delegated via `app.licenses` RLS. `audit_reader` requires `SELECT` on `app.licenses` (granted in `03_app.sql`) to evaluate the delegation subquery. TODO: replace with a SECURITY DEFINER helper function to remove the cross-schema grant. |
+| `audit.audit_log_sessions` | 2 | Insert allowed to `audit_writer`; select delegated via `app.sessions` RLS. `audit_reader` requires `SELECT` on `app.sessions` (granted in `03_app.sql`) to evaluate the delegation subquery. TODO: replace with a SECURITY DEFINER helper function to remove the cross-schema grant. |
 
 ## 5) Object Trees
 
@@ -237,7 +237,7 @@ Read paths
 | `app.node_locked_license_data` | `app_owner` | table | Node-locked license extension | `app.licenses` | RLS via parent license; write via view only |
 | `app.sessions` | `app_owner` | table | Activation and session lifecycle | `app.licenses`, `reference.session_statuses` | RLS via parent license |
 | `app.heartbeats` (+ partitions) | `app_owner` | partitioned table | Append-only heartbeat time-series | `app.sessions`, lookup FKs | RLS via sessions/licenses; no triggers (is the trail) |
-| `app.v_license_node_locked` | `app_owner` | view | Mandatory write interface for node-locked licenses | `app.licenses`, `app.node_locked_license_data` | Audited and routed by INSTEAD OF triggers |
+| `app.v_license_node_locked` | `app_owner` | view | Mandatory write interface for node-locked licenses | `app.licenses`, `app.node_locked_license_data` | `security_invoker=true` ensures RLS on underlying tables is evaluated with the calling role's credentials, not `app_owner`'s (which would bypass RLS as table owner). Audited and routed by INSTEAD OF triggers. |
 | `audit.audit_logs` | `audit_owner` | table | Core immutable audit event record | `reference.actions` | RLS: select only if vendor in actor junction; immutability trigger |
 | `audit.audit_log_vendor_actors` | `audit_owner` | table | Actor (vendor) junction | `audit.audit_logs`, `app.vendors` | Drives audit row visibility via RLS |
 | `audit.audit_log_licenses` | `audit_owner` | table | License resource junction | `audit.audit_logs`, `app.licenses` | Visibility delegated via `app.licenses` RLS |

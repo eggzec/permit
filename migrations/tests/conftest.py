@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import psycopg
 import pytest
+from psycopg_pool import ConnectionPool
 from testcontainers.postgres import PostgresContainer
 
 from .helpers import (
@@ -63,41 +63,26 @@ def pytest_configure(config: pytest.Config) -> None:
 @pytest.fixture(scope="session")
 def migrated_db():
     """Session-scoped PostgreSQL container with all migrations applied."""
-    with _create_postgres_container() as container:
-        yield container
-
-
-@pytest.fixture(scope="session")
-def conn_url(migrated_db):
-    """Connection URL for the migrated database."""
-    return migrated_db.get_connection_url(driver=None)
-
-
-@pytest.fixture
-def superconn(conn_url):
-    """Per-test transactional connection with automatic rollback."""
-    with psycopg.connect(conn_url, autocommit=False) as conn:
-        yield conn
-        conn.rollback()
-
-
-@pytest.fixture(scope="session")
-def mutation_db():
-    """Session-scoped fresh PostgreSQL container for mutation tests.
-
-    Used by down-migration and idempotency tests that need isolated state
-    and apply migrations or schema changes that would mutate shared state.
-    """
-    with _create_postgres_container() as container:
-        yield container
-
-
-def _create_postgres_container():
-    """Create a PostgreSQL container with migrations mounted."""
-    return (
+    with (
         PostgresContainer(POSTGRES_IMAGE, driver=None)
         .with_volume_mapping(
             str(MIGRATIONS_DIR), "/docker-entrypoint-initdb.d", mode="ro"
         )
         .waiting_for(PgReadyWaitStrategy())
-    )
+    ) as container:
+        with ConnectionPool(
+            container.get_connection_url(),
+            min_size=4,  # Connections ready at startup
+            max_size=20,  # Maximum connections allowed
+            open=True,  # Open pool immediately
+            check=ConnectionPool.check_connection,  # Test each connection before use
+        ) as pool:
+            yield pool
+
+
+@pytest.fixture
+def superconn(migrated_db):
+    """Per-test transactional connection with automatic rollback, drawn from the pool."""
+    with migrated_db.connection() as conn:
+        with conn.transaction(force_rollback=True):
+            yield conn

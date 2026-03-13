@@ -27,11 +27,39 @@ BEGIN;
 -- ============================================================
 -- Drop triggers first (before their functions)
 -- ============================================================
+-- All trigger drops are guarded against missing tables/views
+-- to remain idempotent if objects have been dropped elsewhere.
 
-DROP TRIGGER IF EXISTS vendors_audit_tr                ON app.vendors;
-DROP TRIGGER IF EXISTS sessions_audit_tr               ON app.sessions;
-DROP TRIGGER IF EXISTS v_license_node_locked_write_tr  ON app.v_license_node_locked;
-DROP TRIGGER IF EXISTS v_license_node_locked_delete_tr ON app.v_license_node_locked;
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'app' AND c.relname = 'vendors'
+    ) THEN
+        DROP TRIGGER IF EXISTS vendors_audit_tr ON app.vendors;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'app' AND c.relname = 'sessions'
+    ) THEN
+        DROP TRIGGER IF EXISTS sessions_audit_tr ON app.sessions;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'app' AND c.relname = 'v_license_node_locked'
+    ) THEN
+        DROP TRIGGER IF EXISTS v_license_node_locked_write_tr  ON app.v_license_node_locked;
+        DROP TRIGGER IF EXISTS v_license_node_locked_delete_tr ON app.v_license_node_locked;
+    END IF;
+END $$;
 
 -- ============================================================
 -- Drop trigger functions

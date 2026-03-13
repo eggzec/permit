@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run
 # /// script
 # dependencies = [
-#     "psycopg[binary]>=3.1.13",
+#     "psycopg[binary,pool]>=3.1.13",
 #     "pytest>=7.4.3",
 #     "pytest-xdist>=3.2.0",
 #     "testcontainers[postgres]>=4.0.0",

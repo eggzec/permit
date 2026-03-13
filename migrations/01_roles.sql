@@ -299,6 +299,9 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "app_owner"
 GRANT USAGE ON SCHEMA "reference" TO "reference_reader", "reference_writer";
 GRANT USAGE ON SCHEMA "reference" TO "app_owner", "audit_owner";
 GRANT USAGE ON SCHEMA "audit"     TO "audit_writer", "audit_reader";
+-- app_writer and app_deleter need USAGE on audit schema so the SECURITY INVOKER
+-- INSTEAD OF trigger on app.v_license_node_locked can call audit._insert_log.
+GRANT USAGE ON SCHEMA "audit"     TO "app_writer", "app_deleter";
 GRANT USAGE ON SCHEMA "app"       TO "app_reader_rls", "app_reader_bypass",
                                      "app_writer", "app_deleter";
 GRANT USAGE ON SCHEMA "app"       TO "audit_owner", "audit_writer",
