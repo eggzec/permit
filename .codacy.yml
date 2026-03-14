@@ -1,6 +1,5 @@
-include_paths:
-  - "backend/**"
-  - "migrations/**"
+include_paths: ["backend/**"]
 exclude_paths:
   - ".github/**"
-  - "backend/tests/**"
+  - "**/tests/**"
+  - "migrations/**"

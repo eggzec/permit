@@ -11,12 +11,35 @@
 --   vendors, licenses, node_locked_license_data, sessions, and
 --   heartbeats (range-partitioned by time).
 --
+--   Also creates app.v_license_node_locked — the mandatory
+--   write interface for node-locked licenses. All application
+--   INSERT/UPDATE/DELETE on licenses and node_locked_license_data
+--   must go through this view. The INSTEAD OF trigger (defined
+--   in 07_audit_triggers.sql) handles both DML routing to the
+--   base tables and audit logging atomically.
+--
+-- LICENSE WRITE PATH
+--   Direct INSERT/UPDATE/DELETE on app."licenses" and
+--   app."node_locked_license_data" is restricted to app_owner
+--   (see 01_roles.sql). Application roles (app_writer,
+--   app_deleter) write through app.v_license_node_locked.
+--
+--   Future license subtypes follow this pattern:
+--     1. Create a new extension table (e.g. app."floating_license_data")
+--     2. Create a new view joining app."licenses" with the extension
+--     3. Add an INSTEAD OF trigger on the view in 07_audit_triggers.sql
+--     4. Grant INSERT/UPDATE/DELETE on the new view to app_writer/app_deleter
+--     5. Revoke direct writes on the new extension table in 01_roles.sql
+--
 -- IDEMPOTENCY
 --   Safe to re-run multiple times.
 --   • CREATE TABLE / partitions : wrapped in DO $$ … EXCEPTION
 --     WHEN duplicate_table THEN RAISE NOTICE
 --   • CREATE INDEX : wrapped in DO $$ … EXCEPTION WHEN
 --     duplicate_table THEN RAISE NOTICE
+--   • CREATE VIEW : wrapped in DO $$ … EXCEPTION WHEN
+--     duplicate_table THEN RAISE NOTICE (non-replacing behavior;
+--     use CREATE OR REPLACE VIEW when view can be safely modified)
 --   • COMMENT ON   : outside DO blocks intentionally — COMMENT ON
 --     is idempotent (replaces the existing comment) and requires
 --     no guard.
@@ -77,7 +100,7 @@ BEGIN;
 -- Switch to the schema owner so that default privileges defined
 -- in 01_roles.sql for app_owner apply to all objects created
 -- in this transaction.
-SET LOCAL ROLE app_owner;
+SET LOCAL ROLE "app_owner";
 
 -- ============================================================
 -- app."vendors"
@@ -87,7 +110,7 @@ SET LOCAL ROLE app_owner;
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE app."vendors" (
+    CREATE TABLE "app"."vendors" (
         "id"              UUID        PRIMARY KEY DEFAULT uuidv7(),
         "email"           TEXT        NOT NULL,
         "password_hash"   TEXT        NOT NULL,
@@ -103,19 +126,19 @@ END $$;
 -- Replaces the column-level UNIQUE constraint.
 DO $$ BEGIN
     CREATE UNIQUE INDEX "vendors_email_lower_idx"
-        ON app."vendors" (LOWER("email"));
+        ON "app"."vendors" (LOWER("email"));
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "vendors_email_lower_idx" already exists, skipping';
 END $$;
 
 -- COMMENT ON is idempotent and intentionally outside the DO block.
-COMMENT ON TABLE  app."vendors"                 IS 'Software vendors who issue and manage licenses on the platform. Root multi-tenant boundary: all RLS policies anchor to app."vendors"."id".';
-COMMENT ON COLUMN app."vendors"."id"            IS 'Surrogate primary key (uuidv7, time-ordered). Acts as the tenant identifier for all RLS policies.';
-COMMENT ON COLUMN app."vendors"."email"         IS 'Vendor login email. Globally unique across all tenants.';
-COMMENT ON COLUMN app."vendors"."password_hash" IS 'Salted hash of the vendor password (bcrypt ≥12 rounds or Argon2 with adaptive cost). Raw password is never persisted. Algorithm and parameters are encoded in the hash; application handles verification.';
-COMMENT ON COLUMN app."vendors"."created_at"    IS 'Account creation timestamp (UTC).';
-COMMENT ON COLUMN app."vendors"."updated_at"    IS 'Last update timestamp (UTC). Application must set this on every write.';
-COMMENT ON COLUMN app."vendors"."deleted_at"    IS 'Soft-delete marker. Non-NULL means the account is deactivated. All downstream data is retained for audit purposes.';
+COMMENT ON TABLE  "app"."vendors"                 IS 'Software vendors who issue and manage licenses on the platform. Root multi-tenant boundary: all RLS policies anchor to app."vendors"."id".';
+COMMENT ON COLUMN "app"."vendors"."id"            IS 'Surrogate primary key (uuidv7, time-ordered). Acts as the tenant identifier for all RLS policies.';
+COMMENT ON COLUMN "app"."vendors"."email"         IS 'Vendor login email. Globally unique across all tenants.';
+COMMENT ON COLUMN "app"."vendors"."password_hash" IS 'Salted hash of the vendor password (bcrypt ≥12 rounds or Argon2 with adaptive cost). Raw password is never persisted. Algorithm and parameters are encoded in the hash; application handles verification.';
+COMMENT ON COLUMN "app"."vendors"."created_at"    IS 'Account creation timestamp (UTC).';
+COMMENT ON COLUMN "app"."vendors"."updated_at"    IS 'Last update timestamp (UTC). Application must set this on every write.';
+COMMENT ON COLUMN "app"."vendors"."deleted_at"    IS 'Soft-delete marker. Non-NULL means the account is deactivated. All downstream data is retained for audit purposes.';
 
 -- ============================================================
 -- app."licenses"
@@ -124,10 +147,13 @@ COMMENT ON COLUMN app."vendors"."deleted_at"    IS 'Soft-delete marker. Non-NULL
 -- determined by the presence of an extension row (e.g.
 -- app."node_locked_license_data"). EXPIRED is never stored as a
 -- status — it is derived at query time from "expires_at".
+-- ⚠️  Do not write to this table directly from application code.
+-- Use app.v_license_node_locked (or the appropriate subtype
+-- view) so that audit logging fires correctly.
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE app."licenses" (
+    CREATE TABLE "app"."licenses" (
         "id"                   UUID        PRIMARY KEY DEFAULT uuidv7(),
         "vendor_id"            UUID        NOT NULL
                                            REFERENCES app."vendors"("id")
@@ -149,30 +175,31 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table app."licenses" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  app."licenses"                       IS 'Licenses issued by vendors to customers. Root entity for activation, session management, and the audit trail. License type is determined by the presence of an extension row (e.g. app."node_locked_license_data").';
-COMMENT ON COLUMN app."licenses"."id"                  IS 'Surrogate primary key (uuidv7, time-ordered).';
-COMMENT ON COLUMN app."licenses"."vendor_id"           IS 'Owning vendor (FK → app."vendors"). Enforces multi-tenancy; filtered by RLS policies.';
-COMMENT ON COLUMN app."licenses"."client_id"           IS 'Nullable placeholder for a future app."customers" table. Allows logical customer grouping without a FK constraint in the current schema version.';
-COMMENT ON COLUMN app."licenses"."license_status_code" IS 'Stored lifecycle status (FK → reference."license_statuses"). EXPIRED is intentionally absent — it is derived at query time from "expires_at" to avoid redundancy.';
-COMMENT ON COLUMN app."licenses"."expires_at"          IS 'Optional expiry timestamp (UTC). NULL means the license is perpetual. Expiry is checked at query time, not persisted as a status.';
-COMMENT ON COLUMN app."licenses"."max_grace_secs"      IS 'Seconds between heartbeats before a session transitions to ZOMBIE. License-level policy shared by all sessions on this license. Must be > 0; application must supply an explicit value.';
-COMMENT ON COLUMN app."licenses"."metadata"            IS 'Arbitrary vendor-defined key-value metadata (e.g. product tier, feature flags). The platform does not interpret or validate this field.';
-COMMENT ON COLUMN app."licenses"."created_at"          IS 'License creation timestamp (UTC).';
-COMMENT ON COLUMN app."licenses"."updated_at"          IS 'Last update timestamp (UTC). Application must set this on every write.';
-COMMENT ON COLUMN app."licenses"."deleted_at"          IS 'Soft-delete marker. Non-NULL means the license is inactive. Retained for audit history; hard deletion is never performed.';
+COMMENT ON TABLE  "app"."licenses"                       IS 'Licenses issued by vendors to customers. Root entity for activation, session management, and the audit trail. Write through subtype views only (e.g. app.v_license_node_locked). Direct writes bypass audit triggers.';
+COMMENT ON COLUMN "app"."licenses"."id"                  IS 'Surrogate primary key (uuidv7, time-ordered).';
+COMMENT ON COLUMN "app"."licenses"."vendor_id"           IS 'Owning vendor (FK → app."vendors"). Enforces multi-tenancy; filtered by RLS policies.';
+COMMENT ON COLUMN "app"."licenses"."client_id"           IS 'Nullable placeholder for a future app."customers" table. Allows logical customer grouping without a FK constraint in the current schema version.';
+COMMENT ON COLUMN "app"."licenses"."license_status_code" IS 'Stored lifecycle status (FK → reference."license_statuses"). EXPIRED is intentionally absent — it is derived at query time from "expires_at" to avoid redundancy.';
+COMMENT ON COLUMN "app"."licenses"."expires_at"          IS 'Optional expiry timestamp (UTC). NULL means the license is perpetual. Expiry is checked at query time, not persisted as a status.';
+COMMENT ON COLUMN "app"."licenses"."max_grace_secs"      IS 'Seconds between heartbeats before a session transitions to ZOMBIE. License-level policy shared by all sessions on this license. Must be > 0; application must supply an explicit value.';
+COMMENT ON COLUMN "app"."licenses"."metadata"            IS 'Arbitrary vendor-defined key-value metadata (e.g. product tier, feature flags). The platform does not interpret or validate this field.';
+COMMENT ON COLUMN "app"."licenses"."created_at"          IS 'License creation timestamp (UTC).';
+COMMENT ON COLUMN "app"."licenses"."updated_at"          IS 'Last update timestamp (UTC). Application must set this on every write.';
+COMMENT ON COLUMN "app"."licenses"."deleted_at"          IS 'Soft-delete marker. Non-NULL means the license is inactive. Retained for audit history; hard deletion is never performed.';
 
 -- ============================================================
 -- app."node_locked_license_data"
 -- ============================================================
 -- Extension table for the node-locked license subtype.
 -- Presence of a row signals the parent license is node-locked.
--- Future subtypes (e.g. floating, site) each get their own
--- extension table — no type discriminator column is needed on
--- app."licenses".
+-- Future subtypes each get their own extension table.
+-- ⚠️  Do not write to this table directly from application code.
+-- Use app.v_license_node_locked so that audit logging fires
+-- correctly and the base license row is always created first.
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE app."node_locked_license_data" (
+    CREATE TABLE "app"."node_locked_license_data" (
         "license_id"              UUID    PRIMARY KEY
                                           REFERENCES app."licenses"("id")
                                           ON DELETE RESTRICT,
@@ -186,11 +213,11 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table app."node_locked_license_data" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  app."node_locked_license_data"                           IS 'Extension table for the node-locked license subtype. Presence of a row indicates the parent license is node-locked. Future subtypes each get their own extension table; no type discriminator is needed on app."licenses".';
-COMMENT ON COLUMN app."node_locked_license_data"."license_id"              IS 'FK to and PK of the parent license (app."licenses"). Enforces a strict 1:1 relationship. RESTRICT prevents parent deletion while this extension row exists.';
-COMMENT ON COLUMN app."node_locked_license_data"."license_key"             IS 'Cryptographically random activation key distributed to the customer. Globally unique across all licenses.';
-COMMENT ON COLUMN app."node_locked_license_data"."device_fingerprint_hash" IS 'SHA-256 hash of device identifiers (BIOS UUID + CPU serial + disk serial). Computed server-side. NULL until first activation; locked to the value stored in app."sessions"."device_fingerprint_hash" on the first successful heartbeat for this license.';
-COMMENT ON COLUMN app."node_locked_license_data"."max_sessions"            IS 'Maximum number of concurrent ACTIVE sessions permitted on this device. Default 1. Prevents multi-process execution of a single node-locked license.';
+COMMENT ON TABLE  "app"."node_locked_license_data"                           IS 'Extension table for the node-locked license subtype. Presence of a row indicates the parent license is node-locked. Future subtypes each get their own extension table; no type discriminator is needed on app."licenses". Write through app.v_license_node_locked only. Direct writes bypass audit triggers.';
+COMMENT ON COLUMN "app"."node_locked_license_data"."license_id"              IS 'FK to and PK of the parent license (app."licenses"). Enforces a strict 1:1 relationship. RESTRICT prevents parent deletion while this extension row exists.';
+COMMENT ON COLUMN "app"."node_locked_license_data"."license_key"             IS 'Cryptographically random activation key distributed to the customer. Globally unique across all licenses.';
+COMMENT ON COLUMN "app"."node_locked_license_data"."device_fingerprint_hash" IS 'SHA-256 hash of device identifiers (BIOS UUID + CPU serial + disk serial). Computed server-side. NULL until first activation; locked to the value stored in app."sessions"."device_fingerprint_hash" on the first successful heartbeat for this license.';
+COMMENT ON COLUMN "app"."node_locked_license_data"."max_sessions"            IS 'Maximum number of concurrent ACTIVE sessions permitted on this device. Default 1. Prevents multi-process execution of a single node-locked license.';
 
 -- ============================================================
 -- app."sessions"
@@ -203,7 +230,7 @@ COMMENT ON COLUMN app."node_locked_license_data"."max_sessions"            IS 'M
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE app."sessions" (
+    CREATE TABLE "app"."sessions" (
         "id"                      UUID        PRIMARY KEY DEFAULT uuidv7(),
         "license_id"              UUID        NOT NULL
                                               REFERENCES app."licenses"("id")
@@ -221,15 +248,15 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table app."sessions" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  app."sessions"                           IS 'Active and historical sessions created via license activation. Mostly immutable after creation; "session_status_code" and "updated_at" are updated on state transitions. Liveness is determined by querying MAX("heartbeat_at") in app."heartbeats" for the given session_id.';
-COMMENT ON COLUMN app."sessions"."id"                      IS 'Surrogate primary key (uuidv7, time-ordered).';
-COMMENT ON COLUMN app."sessions"."license_id"              IS 'License activated by this session (FK → app."licenses"). Joined on every heartbeat to retrieve max_grace_secs, license_status_code, and expires_at.';
-COMMENT ON COLUMN app."sessions"."session_status_code"     IS 'Stored lifecycle state (FK → reference."session_statuses"). Values: ACTIVE, REVOKED, ZOMBIE, CLEANUP. Derived states (grace period exceeded, license expired) are computed at query time and never stored.';
-COMMENT ON COLUMN app."sessions"."session_token_hash"      IS 'One-way hash (HMAC-SHA256) of the session bearer token. The sole credential used to authenticate heartbeat requests.';
-COMMENT ON COLUMN app."sessions"."device_fingerprint_hash" IS 'Device fingerprint captured at session creation (activation time). For node-locked licenses, this value is used to populate app."node_locked_license_data"."device_fingerprint_hash" on the first successful heartbeat if that column is still NULL.';
-COMMENT ON COLUMN app."sessions"."created_at"              IS 'Session creation timestamp (UTC). Represents the activation moment for this device and license combination.';
-COMMENT ON COLUMN app."sessions"."updated_at"              IS 'Last update timestamp (UTC). Updated on every session state transition (e.g. ACTIVE → ZOMBIE).';
-COMMENT ON COLUMN app."sessions"."metadata"                IS 'Arbitrary metadata captured at activation time (SDK version, OS, hostname, etc.). Immutable after creation. The platform does not interpret this field.';
+COMMENT ON TABLE  "app"."sessions"                           IS 'Active and historical sessions created via license activation. Mostly immutable after creation; "session_status_code" and "updated_at" are updated on state transitions. Liveness is determined by querying MAX("heartbeat_at") in app."heartbeats" for the given session_id.';
+COMMENT ON COLUMN "app"."sessions"."id"                      IS 'Surrogate primary key (uuidv7, time-ordered).';
+COMMENT ON COLUMN "app"."sessions"."license_id"              IS 'License activated by this session (FK → app."licenses"). Joined on every heartbeat to retrieve max_grace_secs, license_status_code, and expires_at.';
+COMMENT ON COLUMN "app"."sessions"."session_status_code"     IS 'Stored lifecycle state (FK → reference."session_statuses"). Values: ACTIVE, REVOKED, ZOMBIE, CLEANUP. Derived states (grace period exceeded, license expired) are computed at query time and never stored.';
+COMMENT ON COLUMN "app"."sessions"."session_token_hash"      IS 'One-way hash (HMAC-SHA256) of the session bearer token. The sole credential used to authenticate heartbeat requests.';
+COMMENT ON COLUMN "app"."sessions"."device_fingerprint_hash" IS 'Device fingerprint captured at session creation (activation time). For node-locked licenses, this value is used to populate app."node_locked_license_data"."device_fingerprint_hash" on the first successful heartbeat if that column is still NULL.';
+COMMENT ON COLUMN "app"."sessions"."created_at"              IS 'Session creation timestamp (UTC). Represents the activation moment for this device and license combination.';
+COMMENT ON COLUMN "app"."sessions"."updated_at"              IS 'Last update timestamp (UTC). Updated on every session state transition (e.g. ACTIVE → ZOMBIE).';
+COMMENT ON COLUMN "app"."sessions"."metadata"                IS 'Arbitrary metadata captured at activation time (SDK version, OS, hostname, etc.). Immutable after creation. The platform does not interpret this field.';
 
 -- ============================================================
 -- app."heartbeats"
@@ -267,7 +294,7 @@ COMMENT ON COLUMN app."sessions"."metadata"                IS 'Arbitrary metadat
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE app."heartbeats" (
+    CREATE TABLE "app"."heartbeats" (
         "id"                         UUID        NOT NULL DEFAULT uuidv7(),
         "session_id"                 UUID        NOT NULL
                                                  REFERENCES app."sessions"("id")
@@ -291,12 +318,12 @@ EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table app."heartbeats" (partitioned) already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  app."heartbeats"                              IS 'Append-only time-series log of all heartbeat events (CONTINUE, errors, revocations, expirations). Range-partitioned by "heartbeat_at". Liveness is determined by querying MAX("heartbeat_at") for a given session_id.';
-COMMENT ON COLUMN app."heartbeats"."id"                         IS 'Unique row identifier (uuidv7). Forms part of the composite PK required by PostgreSQL for partitioned tables.';
-COMMENT ON COLUMN app."heartbeats"."session_id"                 IS 'Session that emitted this heartbeat event (FK → app."sessions"). CASCADE deletion removes heartbeat rows if a session is hard-deleted.';
-COMMENT ON COLUMN app."heartbeats"."heartbeat_resp_status_code" IS 'Response code returned to the SDK (FK → reference."heartbeat_resp_statuses"). CONTINUE responses are recorded to support liveness tracking without updating app."sessions".';
-COMMENT ON COLUMN app."heartbeats"."error_code"                 IS 'Error code populated when "heartbeat_resp_status_code" = ERROR (FK → reference."error_codes"). Must be NULL for all non-ERROR responses. Enforced by chk_heartbeats_status_error_code_consistency.';
-COMMENT ON COLUMN app."heartbeats"."heartbeat_at"               IS 'Timestamp when the heartbeat event was received by the server (UTC). Partition key; BRIN index supports efficient time-range scans for liveness queries.';
+COMMENT ON TABLE  "app"."heartbeats"                              IS 'Append-only time-series log of all heartbeat events (CONTINUE, errors, revocations, expirations). Range-partitioned by "heartbeat_at". Liveness is determined by querying MAX("heartbeat_at") for a given session_id.';
+COMMENT ON COLUMN "app"."heartbeats"."id"                         IS 'Unique row identifier (uuidv7). Forms part of the composite PK required by PostgreSQL for partitioned tables.';
+COMMENT ON COLUMN "app"."heartbeats"."session_id"                 IS 'Session that emitted this heartbeat event (FK → app."sessions"). CASCADE deletion removes heartbeat rows if a session is hard-deleted.';
+COMMENT ON COLUMN "app"."heartbeats"."heartbeat_resp_status_code" IS 'Response code returned to the SDK (FK → reference."heartbeat_resp_statuses"). CONTINUE responses are recorded to support liveness tracking without updating app."sessions".';
+COMMENT ON COLUMN "app"."heartbeats"."error_code"                 IS 'Error code populated when "heartbeat_resp_status_code" = ERROR (FK → reference."error_codes"). Must be NULL for all non-ERROR responses. Enforced by chk_heartbeats_status_error_code_consistency.';
+COMMENT ON COLUMN "app"."heartbeats"."heartbeat_at"               IS 'Timestamp when the heartbeat event was received by the server (UTC). Partition key; BRIN index supports efficient time-range scans for liveness queries.';
 
 -- ------------------------------------------------------------
 -- Quarterly range partitions — 2026 Q1 through 2027 Q1
@@ -305,8 +332,8 @@ COMMENT ON COLUMN app."heartbeats"."heartbeat_at"               IS 'Timestamp wh
 -- ------------------------------------------------------------
 
 DO $$ BEGIN
-    CREATE TABLE app."heartbeats_2026_q1"
-        PARTITION OF app."heartbeats"
+    CREATE TABLE "app"."heartbeats_2026_q1"
+        PARTITION OF "app"."heartbeats"
         FOR VALUES FROM (TIMESTAMPTZ '2026-01-01 00:00:00+00')
                      TO (TIMESTAMPTZ '2026-04-01 00:00:00+00');
 EXCEPTION WHEN duplicate_table THEN
@@ -314,8 +341,8 @@ EXCEPTION WHEN duplicate_table THEN
 END $$;
 
 DO $$ BEGIN
-    CREATE TABLE app."heartbeats_2026_q2"
-        PARTITION OF app."heartbeats"
+    CREATE TABLE "app"."heartbeats_2026_q2"
+        PARTITION OF "app"."heartbeats"
         FOR VALUES FROM (TIMESTAMPTZ '2026-04-01 00:00:00+00')
                      TO (TIMESTAMPTZ '2026-07-01 00:00:00+00');
 EXCEPTION WHEN duplicate_table THEN
@@ -323,8 +350,8 @@ EXCEPTION WHEN duplicate_table THEN
 END $$;
 
 DO $$ BEGIN
-    CREATE TABLE app."heartbeats_2026_q3"
-        PARTITION OF app."heartbeats"
+    CREATE TABLE "app"."heartbeats_2026_q3"
+        PARTITION OF "app"."heartbeats"
         FOR VALUES FROM (TIMESTAMPTZ '2026-07-01 00:00:00+00')
                      TO (TIMESTAMPTZ '2026-10-01 00:00:00+00');
 EXCEPTION WHEN duplicate_table THEN
@@ -332,8 +359,8 @@ EXCEPTION WHEN duplicate_table THEN
 END $$;
 
 DO $$ BEGIN
-    CREATE TABLE app."heartbeats_2026_q4"
-        PARTITION OF app."heartbeats"
+    CREATE TABLE "app"."heartbeats_2026_q4"
+        PARTITION OF "app"."heartbeats"
         FOR VALUES FROM (TIMESTAMPTZ '2026-10-01 00:00:00+00')
                      TO (TIMESTAMPTZ '2027-01-01 00:00:00+00');
 EXCEPTION WHEN duplicate_table THEN
@@ -341,8 +368,8 @@ EXCEPTION WHEN duplicate_table THEN
 END $$;
 
 DO $$ BEGIN
-    CREATE TABLE app."heartbeats_2027_q1"
-        PARTITION OF app."heartbeats"
+    CREATE TABLE "app"."heartbeats_2027_q1"
+        PARTITION OF "app"."heartbeats"
         FOR VALUES FROM (TIMESTAMPTZ '2027-01-01 00:00:00+00')
                      TO (TIMESTAMPTZ '2027-04-01 00:00:00+00');
 EXCEPTION WHEN duplicate_table THEN
@@ -354,8 +381,8 @@ END $$;
 -- losing time-range pruning for those rows. Monitor and move
 -- rows to a proper partition during the next partition rotation.
 DO $$ BEGIN
-    CREATE TABLE app."heartbeats_default"
-        PARTITION OF app."heartbeats" DEFAULT;
+    CREATE TABLE "app"."heartbeats_default"
+        PARTITION OF "app"."heartbeats" DEFAULT;
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'partition app."heartbeats_default" already exists, skipping';
 END $$;
@@ -363,12 +390,10 @@ END $$;
 -- ------------------------------------------------------------
 -- Indexes on app."heartbeats"
 -- ------------------------------------------------------------
--- Indexes created on the partition parent are automatically
--- propagated to all existing and future child partitions
--- (PostgreSQL 11+), including heartbeats_default.
---
--- These two indexes are exceptions to the deferred index policy
--- and are required from day one:
+-- Indexes on the parent are automatically propagated to all
+-- existing and future child partitions (PostgreSQL 11+).
+-- These two are required from day one — see INDEX STRATEGY
+-- in the file header:
 --   heartbeats_session_id_idx    — primary FK access pattern on
 --     every heartbeat validation query.
 --   heartbeats_heartbeat_at_idx  — BRIN index required by the
@@ -377,16 +402,107 @@ END $$;
 
 DO $$ BEGIN
     CREATE INDEX "heartbeats_session_id_idx"
-        ON app."heartbeats" ("session_id");
+        ON "app"."heartbeats" ("session_id");
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "heartbeats_session_id_idx" already exists, skipping';
 END $$;
 
 DO $$ BEGIN
     CREATE INDEX "heartbeats_heartbeat_at_idx"
-        ON app."heartbeats" USING BRIN ("heartbeat_at");
+        ON "app"."heartbeats" USING BRIN ("heartbeat_at");
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "heartbeats_heartbeat_at_idx" already exists, skipping';
 END $$;
+
+-- ============================================================
+-- app.v_license_node_locked
+-- ============================================================
+-- Mandatory write interface for node-locked licenses.
+-- An INNER JOIN is used deliberately: this view represents
+-- only fully-formed node-locked licenses where both the base
+-- license row and the extension row exist. Other license
+-- subtypes (floating, site, etc.) have their own views with
+-- their own extension tables. Using INNER JOIN prevents a
+-- license from appearing in multiple subtype views
+-- simultaneously.
+--
+-- ⚠️  All application INSERT/UPDATE/DELETE on node-locked
+-- licenses must target this view. The INSTEAD OF trigger
+-- (defined in 07_audit_triggers.sql) routes DML to the base
+-- tables and emits unified audit entries covering both tables
+-- atomically.
+--
+-- app_writer and app_deleter have INSERT/UPDATE/DELETE granted
+-- on this view below. They have no direct write access to
+-- app."licenses" or app."node_locked_license_data".
+--
+-- On INSERT: both app."licenses" and
+--   app."node_locked_license_data" rows are created by the
+--   trigger. The base license row is inserted first to satisfy
+--   the FK constraint.
+-- On DELETE: the extension row is deleted first, then the
+--   base license row.
+-- On UPDATE: each table is updated independently; the trigger
+--   sees OLD and NEW for all columns simultaneously enabling
+--   a unified diff.
+--
+-- Future license subtype pattern:
+--   CREATE OR REPLACE VIEW app.v_license_<subtype> AS
+--     SELECT l.*, ext.*
+--     FROM app."licenses" l
+--     INNER JOIN app."<subtype>_license_data" ext
+--       ON ext.license_id = l.id;
+--   Then add an INSTEAD OF trigger in 07_audit_triggers.sql.
+-- ============================================================
+
+DO $$ BEGIN
+    CREATE VIEW app.v_license_node_locked
+        WITH (security_invoker=true) AS
+        SELECT
+            -- Base license columns
+            app."licenses"."id",
+            app."licenses"."vendor_id",
+            app."licenses"."client_id",
+            app."licenses"."license_status_code",
+            app."licenses"."expires_at",
+            app."licenses"."max_grace_secs",
+            app."licenses"."metadata",
+            app."licenses"."created_at",
+            app."licenses"."updated_at",
+            app."licenses"."deleted_at",
+            -- Node-locked extension columns
+            app."node_locked_license_data"."license_key",
+            app."node_locked_license_data"."device_fingerprint_hash",
+            app."node_locked_license_data"."max_sessions"
+        FROM "app"."licenses"
+        JOIN "app"."node_locked_license_data"
+            ON "app"."node_locked_license_data"."license_id" = "app"."licenses"."id";
+EXCEPTION WHEN duplicate_table THEN
+    RAISE NOTICE 'view app.v_license_node_locked already exists, skipping';
+END $$;
+
+COMMENT ON VIEW app.v_license_node_locked IS
+    'Write interface for node-locked licenses. INNER JOIN ensures '
+    'only fully-formed node-locked licenses (base + extension row) '
+    'are visible. All application writes must target this view; '
+    'the INSTEAD OF trigger in 07_audit_triggers.sql routes DML '
+    'to the base tables and emits unified audit entries. '
+    'security_invoker=true ensures RLS policies are applied with the '
+    'calling role''s credentials, preventing the view owner (app_owner) '
+    'from silently bypassing row-level security. '
+    'Direct writes to app."licenses" or app."node_locked_license_data" '
+    'bypass audit logging and are restricted to app_owner only.';
+
+-- ============================================================
+-- Grants to audit_reader on app tables
+-- ============================================================
+-- audit_reader needs SELECT on these tables so that the RLS
+-- delegation subqueries in audit_log_licenses_select_own and
+-- audit_log_sessions_select_own can evaluate. PostgreSQL still
+-- applies the app.*_select_own RLS policies inside those
+-- subqueries, enforcing tenant isolation.
+-- ============================================================
+GRANT SELECT ON app."licenses" TO audit_reader;
+GRANT SELECT ON app."sessions" TO audit_reader;
 
 COMMIT;

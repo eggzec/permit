@@ -2,19 +2,30 @@
 -- Downgrade : App Schema — Business Tables
 -- Platform  : LaaS (License as a Service)
 -- Database  : PostgreSQL 18
--- Run order : 03 — second in the downgrade sequence
+-- Reverses  : 03_app.sql
+-- Run order : 03 — fifth in the downgrade sequence
 -- Depends on: 04_audit_down.sql must have completed first so
 --             that all audit FK references into this schema
 --             have been removed
 -- ============================================================
 --
 -- PURPOSE
---   Drops all business tables in the `app` schema created by
---   03_app.sql, including all heartbeat partitions, indexes,
---   and the extension table.
+--   Drops all business tables, views, partitions, and indexes
+--   in the `app` schema created by 03_app.sql.
+--
+-- ORDER
+--   Views must be dropped before their underlying base tables.
+--   app.v_license_node_locked references app."licenses" and
+--   app."node_locked_license_data" — it is dropped first.
+--
+--   The INSTEAD OF trigger on the view is dropped in
+--   07_audit_triggers_down.sql which runs before this file.
+--   By the time this file runs the view has no triggers
+--   attached and can be dropped cleanly.
 --
 -- IDEMPOTENCY
 --   Safe to re-run multiple times.
+--   • DROP VIEW  IF EXISTS — no error if already absent
 --   • DROP TABLE IF EXISTS — no error if already absent
 --
 -- TRANSACTION
@@ -35,23 +46,53 @@
 --   partition is added.
 --
 -- CASCADE POLICY
---   CASCADE is used only on app."heartbeats" to remove child
---   partitions. All other DROP TABLE statements omit CASCADE
---   so that any unexpected FK dependencies surface as errors
---   rather than silently cascading.
+--   Partition children (heartbeats_2026_q1 …)
+--   are automatically dropped when the partitioned parent is dropped
+--   in PostgreSQL — no CASCADE required. Omitting CASCADE ensures any
+--   unexpected FK dependencies on app."heartbeats" surface as errors
+--   rather than silently cascading to unrelated objects.
 -- ============================================================
 
 BEGIN;
 
 -- ============================================================
--- Drop app."heartbeats" (partitioned)
+-- Reverses the GRANT SELECT added in 03_app.sql.
 -- ============================================================
--- CASCADE removes all quarterly partitions and the default
--- partition automatically. Indexes on the parent and all
--- child partitions are also removed by CASCADE.
+DO $$ BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader') THEN
+        IF EXISTS (
+            SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'app' AND c.relname = 'licenses'
+        ) THEN
+            REVOKE SELECT ON app."licenses" FROM audit_reader;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'app' AND c.relname = 'sessions'
+        ) THEN
+            REVOKE SELECT ON app."sessions" FROM audit_reader;
+        END IF;
+    END IF;
+END $$;
+
+-- ============================================================
+-- Drop view first (references base tables)
 -- ============================================================
 
-DROP TABLE IF EXISTS app."heartbeats" CASCADE;
+DROP VIEW IF EXISTS app."v_license_node_locked";
+
+-- ============================================================
+-- Drop app."heartbeats" (partitioned)
+-- ============================================================
+-- PostgreSQL automatically drops all child partitions
+-- (heartbeats_2026_q1 … heartbeats_2027_q1, heartbeats_default)
+-- and their indexes when the partitioned parent is dropped.
+-- CASCADE is intentionally omitted — any unexpected FK
+-- dependency would surface as an error rather than silently
+-- cascading to unrelated objects.
+-- ============================================================
+
+DROP TABLE IF EXISTS app."heartbeats";
 
 -- ============================================================
 -- Drop remaining business tables

@@ -19,9 +19,7 @@
 --   • CREATE INDEX          : wrapped in DO $$ … EXCEPTION WHEN
 --                             duplicate_table THEN RAISE NOTICE
 --   • CREATE OR REPLACE
---     FUNCTION              : idempotent by definition
---   • CREATE OR REPLACE
---     TRIGGER               : idempotent by definition
+--     FUNCTION / TRIGGER    : idempotent by definition
 --   • COMMENT ON            : outside DO blocks intentionally —
 --                             COMMENT ON is idempotent (replaces
 --                             the existing comment) and needs no
@@ -88,23 +86,49 @@ BEGIN;
 -- Switch to the schema owner so that default privileges defined
 -- in 01_roles.sql for audit_owner apply to all objects created
 -- in this transaction.
-SET LOCAL ROLE audit_owner;
+SET LOCAL ROLE "audit_owner";
 
 -- ============================================================
--- audit."auditLogs"
+-- audit."audit_logs"
 -- ============================================================
--- Core audit record. Captures the action, network context, and
--- timestamp. Actor and resource details are in junction tables.
+-- Core audit record. Captures the action, network context,
+-- timestamp, and structured metadata/diff payload.
+-- Actor and resource details are in junction tables.
+--
+-- metadata JSONB usage by trigger-driven events:
+--   CREATED (node_locked INSERT):
+--     {"license_type": "node_locked"}
+--   REVOKED (license/session status change):
+--     {"license_status_code": "<old_value>"}
+--     {"session_status_code": "<old_value>"}
+--   CONFIG_UPDATED:
+--     {"expires_at": "<old_value>"}
+--     {"max_grace_secs": <old_value>}
+--     {"max_sessions": <old_value>}
+--     Multiple fields merged if changed in same UPDATE.
+--   MODIFIED:
+--     {"metadata": <old_jsonb_value>}
+--     {"device_fingerprint_hash": "<old_hash>"}
+--     {"license_key": "rotated"}  -- value never recorded
+--   TOKEN_ROTATED: null — fact of rotation is sufficient
+--   PASSWORD_CHANGED: null — hash values never recorded
+--
+-- metadata JSONB usage by explicit-call events:
+--   HEARTBEAT_ERROR:
+--     {"error_code": "<reference.error_codes code>"}
+--   LOGIN_FAILED (when vendor resolved):
+--     {"resolved": true}
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE audit."audit_logs" (
+    CREATE TABLE "audit"."audit_logs" (
         "id"          UUID        PRIMARY KEY DEFAULT uuidv7(),
         "action_code" TEXT        NOT NULL
                                   REFERENCES reference."actions"("code")
                                   ON DELETE RESTRICT,
         "ip_address"  INET,
         "user_agent"  TEXT,
+        "metadata"    JSONB,
         "created_at"  TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 EXCEPTION WHEN duplicate_table THEN
@@ -112,43 +136,46 @@ EXCEPTION WHEN duplicate_table THEN
 END $$;
 
 -- COMMENT ON is idempotent and intentionally outside the DO block.
-COMMENT ON TABLE  audit."audit_logs"               IS 'Core audit log table. Immutable append-only record of every auditable system event. Captures the action, network context, and timestamp. Actor identity and affected resource are recorded in separate junction tables.';
-COMMENT ON COLUMN audit."audit_logs"."id"          IS 'Surrogate primary key (uuidv7, time-ordered). Referenced as FK by all audit junction tables.';
-COMMENT ON COLUMN audit."audit_logs"."action_code" IS 'Resource-agnostic action verb (FK → reference."actions"). The specific resource type and ID are captured in the appropriate junction table.';
-COMMENT ON COLUMN audit."audit_logs"."ip_address"  IS 'Client IP address at event time (INET type). Supports efficient IP-range queries and subnet filtering for security investigations.';
-COMMENT ON COLUMN audit."audit_logs"."user_agent"  IS 'HTTP User-Agent header at event time. Used to identify SDK versions, detect automated scripts, and flag anomalies.';
-COMMENT ON COLUMN audit."audit_logs"."created_at"  IS 'Timestamp when the entry was recorded (UTC). Immutable after insertion.';
+COMMENT ON TABLE  "audit"."audit_logs"               IS 'Core audit log table. Immutable append-only record of every auditable system event. Captures the action, network context, and timestamp. Actor identity and affected resource are recorded in separate junction tables.';
+COMMENT ON COLUMN "audit"."audit_logs"."id"          IS 'Surrogate primary key (uuidv7, time-ordered). Referenced as FK by all audit junction tables.';
+COMMENT ON COLUMN "audit"."audit_logs"."action_code" IS 'Resource-agnostic action code (FK → reference."actions"). The specific resource type and ID are in the junction tables.';
+COMMENT ON COLUMN "audit"."audit_logs"."ip_address"  IS 'Client IP address at event time (INET). Read from app.ip_address transaction-local config variable.';
+COMMENT ON COLUMN "audit"."audit_logs"."user_agent"  IS 'HTTP User-Agent at event time. Read from app.user_agent transaction-local config variable.';
+COMMENT ON COLUMN "audit"."audit_logs"."metadata"    IS 'Structured context for this audit event. For mutation events: JSONB diff containing only the previous values of changed fields. For application events: supplementary key-value pairs (e.g. error_code for HEARTBEAT_ERROR). NULL for events where the fact of occurrence is sufficient (TOKEN_ROTATED, PASSWORD_CHANGED, DELETED).';
+COMMENT ON COLUMN "audit"."audit_logs"."created_at"  IS 'Timestamp when the entry was recorded (UTC). Immutable after insertion.';
 
 -- ============================================================
 -- audit."audit_log_vendor_actors"
 -- ============================================================
 -- Junction table: identifies the vendor who performed the
 -- action recorded in the parent audit log entry.
--- PK on "audit_log_id" enforces at most one vendor actor per
--- entry. Future actor types (e.g. audit_log_client_actors) are
--- added as separate tables without modifying this one.
+-- Composite PK allows true many-to-many linkage between
+-- audit logs and vendor actors.
+-- Future actor types are added as separate tables.
+-- System-driven events (ZOMBIE/CLEANUP transitions) produce
+-- no vendor actor row — the absence accurately reflects that
+-- no human initiated the action.
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE audit."audit_log_vendor_actors" (
-        "audit_log_id" UUID NOT NULL PRIMARY KEY
-                            REFERENCES audit."audit_logs"("id")
+    CREATE TABLE "audit"."audit_log_vendor_actors" (
+        "audit_log_id" UUID REFERENCES audit."audit_logs"("id")
                             ON DELETE RESTRICT,
-        "vendor_id"    UUID NOT NULL
-                            REFERENCES app."vendors"("id")
-                            ON DELETE RESTRICT
+        "vendor_id"    UUID REFERENCES app."vendors"("id")
+                            ON DELETE RESTRICT,
+        PRIMARY KEY ("audit_log_id", "vendor_id")
     );
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table audit."audit_log_vendor_actors" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  audit."audit_log_vendor_actors"                IS 'Junction table linking an audit log entry to the vendor who performed the action. The PK on "audit_log_id" enforces at most one vendor actor per log entry. Additional actor types (e.g. client actors) are added as separate junction tables.';
-COMMENT ON COLUMN audit."audit_log_vendor_actors"."audit_log_id" IS 'FK → audit."audit_logs". Also the PK of this table — one vendor actor per log entry.';
-COMMENT ON COLUMN audit."audit_log_vendor_actors"."vendor_id"    IS 'Vendor who performed the action (FK → app."vendors"). RESTRICT prevents vendor deletion while the audit trail exists.';
+COMMENT ON TABLE  "audit"."audit_log_vendor_actors"                IS 'Junction table linking audit log entries to vendor actors. Composite PK (audit_log_id, vendor_id) enables true junction semantics. System-driven events (ZOMBIE, CLEANUP transitions) have no vendor actor row.';
+COMMENT ON COLUMN "audit"."audit_log_vendor_actors"."audit_log_id" IS 'FK → audit."audit_logs". Part of composite PK (audit_log_id, vendor_id).';
+COMMENT ON COLUMN "audit"."audit_log_vendor_actors"."vendor_id"    IS 'Vendor who performed the action (FK → app."vendors"). RESTRICT prevents vendor deletion while audit trail exists.';
 
 DO $$ BEGIN
     CREATE INDEX "audit_log_vendor_actors_vendor_id_idx"
-        ON audit."audit_log_vendor_actors" ("vendor_id");
+        ON "audit"."audit_log_vendor_actors" ("vendor_id");
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "audit_log_vendor_actors_vendor_id_idx" already exists, skipping';
 END $$;
@@ -156,33 +183,29 @@ END $$;
 -- ============================================================
 -- audit."audit_log_licenses"
 -- ============================================================
--- Junction table: identifies the license affected by the action.
--- Stores an optional JSON diff of the mutation for change
--- tracking without requiring a separate change-log table.
+-- Pure relationship record — no changes/diff column.
+-- All diff data is in audit."audit_logs"."metadata".
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE audit."audit_log_licenses" (
-        "audit_log_id" UUID  NOT NULL PRIMARY KEY
-                             REFERENCES audit."audit_logs"("id")
-                             ON DELETE RESTRICT,
-        "license_id"   UUID  NOT NULL
-                             REFERENCES app."licenses"("id")
-                             ON DELETE RESTRICT,
-        "changes"      JSONB
+    CREATE TABLE "audit"."audit_log_licenses" (
+        "audit_log_id" UUID REFERENCES "audit"."audit_logs"("id")
+                            ON DELETE RESTRICT,
+        "license_id"   UUID REFERENCES "app"."licenses"("id")
+                            ON DELETE RESTRICT,
+        PRIMARY KEY ("audit_log_id", "license_id")
     );
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table audit."audit_log_licenses" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  audit."audit_log_licenses"                IS 'Junction table identifying a license as the resource affected by an audit log entry. Stores an optional mutation diff in "changes".';
-COMMENT ON COLUMN audit."audit_log_licenses"."audit_log_id" IS 'FK → audit."audit_logs". Also the PK of this table — one license resource per log entry.';
-COMMENT ON COLUMN audit."audit_log_licenses"."license_id"   IS 'License affected by the action (FK → app."licenses"). RESTRICT prevents license deletion while the audit trail exists.';
-COMMENT ON COLUMN audit."audit_log_licenses"."changes"      IS 'Optional JSONB diff of license field mutations. Example: {"license_status_code": {"from": "ACTIVE", "to": "REVOKED"}}. NULL for non-mutating (read-only) actions.';
+COMMENT ON TABLE  "audit"."audit_log_licenses"                IS 'Junction table identifying licenses affected by audit log entries. Composite PK (audit_log_id, license_id) enables true junction semantics. Diff data is in audit."audit_logs"."metadata".';
+COMMENT ON COLUMN "audit"."audit_log_licenses"."audit_log_id" IS 'FK → audit."audit_logs". Part of composite PK (audit_log_id, license_id).';
+COMMENT ON COLUMN "audit"."audit_log_licenses"."license_id"   IS 'License affected by the action (FK → app."licenses"). RESTRICT prevents license deletion while audit trail exists.';
 
 DO $$ BEGIN
     CREATE INDEX "audit_log_licenses_license_id_idx"
-        ON audit."audit_log_licenses" ("license_id");
+        ON "audit"."audit_log_licenses" ("license_id");
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "audit_log_licenses_license_id_idx" already exists, skipping';
 END $$;
@@ -190,32 +213,29 @@ END $$;
 -- ============================================================
 -- audit."audit_log_sessions"
 -- ============================================================
--- Junction table: identifies the session affected by the action.
--- Mirrors the structure of audit_log_licenses for consistency.
+-- Pure relationship record — no changes/diff column.
+-- All diff data is in audit."audit_logs"."metadata".
 -- ============================================================
 
 DO $$ BEGIN
-    CREATE TABLE audit."audit_log_sessions" (
-        "audit_log_id" UUID  NOT NULL PRIMARY KEY
-                             REFERENCES audit."audit_logs"("id")
-                             ON DELETE RESTRICT,
-        "session_id"   UUID  NOT NULL
-                             REFERENCES app."sessions"("id")
-                             ON DELETE RESTRICT,
-        "changes"      JSONB
+    CREATE TABLE "audit"."audit_log_sessions" (
+        "audit_log_id" UUID REFERENCES "audit"."audit_logs"("id")
+                            ON DELETE RESTRICT,
+        "session_id"   UUID REFERENCES "app"."sessions"("id")
+                            ON DELETE RESTRICT,
+        PRIMARY KEY ("audit_log_id", "session_id")
     );
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'table audit."audit_log_sessions" already exists, skipping';
 END $$;
 
-COMMENT ON TABLE  audit."audit_log_sessions"                IS 'Junction table identifying a session as the resource affected by an audit log entry. Stores an optional mutation diff in "changes".';
-COMMENT ON COLUMN audit."audit_log_sessions"."audit_log_id" IS 'FK → audit."audit_logs". Also the PK of this table — one session resource per log entry.';
-COMMENT ON COLUMN audit."audit_log_sessions"."session_id"   IS 'Session affected by the action (FK → app."sessions"). RESTRICT prevents session deletion while the audit trail exists.';
-COMMENT ON COLUMN audit."audit_log_sessions"."changes"      IS 'Optional JSONB diff of session field mutations. Example: {"session_status_code": {"from": "ACTIVE", "to": "REVOKED"}}. NULL for non-mutating (read-only) actions.';
+COMMENT ON TABLE  "audit"."audit_log_sessions"                IS 'Junction table identifying sessions affected by audit log entries. Composite PK (audit_log_id, session_id) enables true junction semantics. Diff data is in audit."audit_logs"."metadata".';
+COMMENT ON COLUMN "audit"."audit_log_sessions"."audit_log_id" IS 'FK → audit."audit_logs". Part of composite PK (audit_log_id, session_id).';
+COMMENT ON COLUMN "audit"."audit_log_sessions"."session_id"   IS 'Session affected by the action (FK → app."sessions"). RESTRICT prevents session deletion while audit trail exists.';
 
 DO $$ BEGIN
     CREATE INDEX "audit_log_sessions_session_id_idx"
-        ON audit."audit_log_sessions" ("session_id");
+        ON "audit"."audit_log_sessions" ("session_id");
 EXCEPTION WHEN duplicate_table THEN
     RAISE NOTICE 'index "audit_log_sessions_session_id_idx" already exists, skipping';
 END $$;
@@ -224,11 +244,8 @@ END $$;
 -- IMMUTABILITY GUARDS
 -- ============================================================
 -- audit.prevent_audit_update_delete()
---   Trigger function that raises an exception on any UPDATE or
---   DELETE attempt against any audit-schema table.
---   SECURITY DEFINER: the function executes with the privileges
---   of its owner (audit_owner) regardless of who calls it,
---   ensuring the guard fires even for superusers.
+--   SECURITY DEFINER: executes as audit_owner regardless of
+--   caller, ensuring the guard fires even for superusers.
 --   SET search_path TO audit: pins the search path inside the
 --   function body to prevent search-path injection attacks.
 --

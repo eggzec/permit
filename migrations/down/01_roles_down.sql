@@ -3,13 +3,15 @@
 -- Platform  : LaaS (License as a Service)
 -- Database  : PostgreSQL 18
 -- Run order : 01 — LAST in the downgrade sequence
--- Depends on: 02_reference_down.sql, 03_app_down.sql,
---             04_audit_down.sql must have completed first
+-- Depends on: all other down migrations must complete first
 -- ============================================================
 --
 -- PURPOSE
---   Drops all three application schemas and all 11 group roles
---   created by 01_roles.sql.
+--   Drops all three application schemas and all group roles
+--   created by 01_roles.sql. Restores direct write privileges
+--   on license tables that were revoked in 01_roles.sql.
+--   Revokes SELECT on app tables granted to audit roles for
+--   the RLS policy subquery path.
 --
 -- IDEMPOTENCY
 --   Safe to re-run multiple times.
@@ -50,6 +52,110 @@
 -- ============================================================
 
 BEGIN;
+
+-- ============================================================
+-- RESTORE DIRECT LICENSE TABLE WRITE PRIVILEGES
+-- ============================================================
+-- 01_roles.sql revoked INSERT/UPDATE/DELETE on app."licenses"
+-- and app."node_locked_license_data" from app_writer and
+-- app_deleter to enforce the view-based write path.
+-- Restore them here so the schema is back to a clean state
+-- before roles are dropped.
+-- ============================================================
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'app' AND c.relname = 'licenses'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_deleter'
+    ) THEN
+        GRANT INSERT, UPDATE, DELETE ON app."licenses"
+            TO app_writer, app_deleter;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'app' AND c.relname = 'node_locked_license_data'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_deleter'
+    ) THEN
+        GRANT INSERT, UPDATE, DELETE ON app."node_locked_license_data"
+            TO app_writer, app_deleter;
+    END IF;
+END $$;
+
+-- ============================================================
+-- REVOKE AUDIT ROLE GRANTS ON APP SCHEMA
+-- ============================================================
+-- 01_roles.sql granted audit_writer and audit_reader SELECT on
+-- app."licenses" and app."sessions" so that audit RLS policy
+-- subqueries (audit_log_licenses → app.licenses, etc.) can
+-- resolve vendor ownership for row-level filtering.
+-- Revoke those grants and the accompanying USAGE on the app
+-- schema here so the schema is back to a clean state before
+-- schemas and roles are dropped.
+-- ============================================================
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'app' AND c.relname = 'licenses'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader'
+    ) THEN
+        REVOKE SELECT ON app."licenses" FROM audit_writer, audit_reader;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'app' AND c.relname = 'sessions'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader'
+    ) THEN
+        REVOKE SELECT ON app."sessions" FROM audit_writer, audit_reader;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_namespace WHERE nspname = 'app'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'audit_reader'
+    ) THEN
+        REVOKE USAGE ON SCHEMA app FROM audit_writer, audit_reader;
+    END IF;
+END $$;
+
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_namespace WHERE nspname = 'audit'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_writer'
+    ) AND EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'app_deleter'
+    ) THEN
+        REVOKE USAGE ON SCHEMA audit FROM app_writer, app_deleter;
+    END IF;
+END $$;
 
 -- ============================================================
 -- REVOKE DEFAULT PRIVILEGES
@@ -197,9 +303,10 @@ END $$;
 -- ============================================================
 -- Schemas must be empty before DROP SCHEMA (no CASCADE).
 -- All tables and functions must have been removed by the
--- preceding down migrations (04 → 03 → 02) before this file
--- is run. If any objects remain, these statements will fail
--- with a "schema is not empty" error — the intended behaviour.
+-- preceding down migrations (07 → 06 → 05 → 04 → 03 → 02)
+-- before this file is run. If any objects remain, these
+-- statements will fail with a "schema is not empty" error —
+-- the intended behaviour.
 --
 -- NOTE: The built-in `public` schema is intentionally omitted.
 -- 01_roles.sql never created it — it only hardened it with
