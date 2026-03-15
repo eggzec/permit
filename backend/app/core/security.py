@@ -1,24 +1,24 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from uuid import UUID
 
 import jwt
 from pwdlib import PasswordHash
-from pwdlib.hashers.argon2 import Argon2Hasher
-from pwdlib.hashers.bcrypt import BcryptHasher
+from pwdlib.hashers import argon2, bcrypt
 
 from app.core.config import Settings
 
 
 # BcryptHasher is listed first so new passwords are hashed with bcrypt.
 # Argon2Hasher is kept for verification of legacy hashes.
-password_hash = PasswordHash((BcryptHasher(), Argon2Hasher()))
+PASSWORD_HASH = PasswordHash((bcrypt.BcryptHasher(), argon2.Argon2Hasher()))
 
 
-ALGORITHM = "HS256"
+JWT_ALGORITHM: str = "HS256"
 
 
 def create_access_token(
-    vendor_id: str,
+    vendor_id: str | UUID,
     settings: Settings,
     *,
     expires_delta: timedelta | None = None,
@@ -36,11 +36,11 @@ def create_access_token(
         "exp": expire,
         "token_type": "access",
     }
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
 def create_refresh_token(
-    vendor_id: str,
+    vendor_id: str | UUID,
     settings: Settings,
     *,
     expires_delta: timedelta | None = None,
@@ -58,7 +58,7 @@ def create_refresh_token(
         "exp": expire,
         "token_type": "refresh",
     }
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
 def decode_token(token: str, settings: Settings) -> dict[str, Any]:
@@ -67,14 +67,14 @@ def decode_token(token: str, settings: Settings) -> dict[str, Any]:
     Returns:
         dict[str, Any]: The decoded token payload.
     """
-    return jwt.decode(token, settings.SECRET_KEY, algorithms=[ALGORITHM])
+    return jwt.decode(token, settings.SECRET_KEY, algorithms=[JWT_ALGORITHM])
 
 
 def verify_password(
     plain_password: str, hashed_password: str
 ) -> tuple[bool, str | None]:
-    return password_hash.verify_and_update(plain_password, hashed_password)
+    return PASSWORD_HASH.verify_and_update(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
-    return password_hash.hash(password)
+    return PASSWORD_HASH.hash(password)

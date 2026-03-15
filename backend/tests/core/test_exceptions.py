@@ -1,12 +1,5 @@
-"""
-Unit tests for exception classes in app.core.exceptions.
-
-Covers: error codes, HTTP status codes, base-class parameter
-storage, details defaulting, custom details, custom messages,
-and default message lengths.
-"""
-
 import pytest
+from faker import Faker
 from fastapi import status
 
 from app.core.exceptions import (
@@ -25,6 +18,9 @@ from app.core.exceptions import (
     ValidationException,
 )
 from app.schemas.response import ErrorCode
+
+
+fake = Faker()
 
 
 # ---------------------------------------------------------------------------
@@ -195,25 +191,28 @@ def test_exception_has_correct_http_status(exception_class, expected_status):
 @pytest.mark.unit
 def test_api_exception_base_class_stores_all_parameters():
     """APIException must store all constructor args."""
+    msg = fake.sentence()
+    field = fake.word()
+    detail_msg = fake.sentence()
     exc = APIException(
         error_code=ErrorCode.VALIDATION_FAILED,
-        message="Test error",
+        message=msg,
         http_status=status.HTTP_400_BAD_REQUEST,
-        details=[{"field": "test", "message": "error"}],
+        details=[{"field": field, "message": detail_msg}],
     )
     assert exc.error_code == ErrorCode.VALIDATION_FAILED, (
         f"Expected error_code VALIDATION_FAILED, got {exc.error_code}"
     )
-    assert exc.message == "Test error", (
-        f"Expected message 'Test error', got '{exc.message}'"
+    assert exc.message == msg, (
+        f"Expected message '{msg}', got '{exc.message}'"
     )
     assert exc.http_status == status.HTTP_400_BAD_REQUEST, (
         f"Expected http_status 400, got {exc.http_status}"
     )
-    assert exc.details == [{"field": "test", "message": "error"}], (
+    assert exc.details == [{"field": field, "message": detail_msg}], (
         f"Expected details with test field, got {exc.details}"
     )
-    assert str(exc) == "Test error", (
+    assert str(exc) == msg, (
         f"Expected str(exc) to return message, got '{exc!s}'"
     )
 
@@ -228,7 +227,7 @@ def test_api_exception_with_details_none_defaults_to_empty():
     """APIException(details=None) must produce an empty details list."""
     exc = APIException(
         error_code=ErrorCode.VALIDATION_FAILED,
-        message="Test error",
+        message=fake.sentence(),
         http_status=status.HTTP_400_BAD_REQUEST,
         details=None,
     )
@@ -322,7 +321,7 @@ def test_exception_stores_custom_details(exception_class, message, details):
 )
 def test_simple_exception_accepts_custom_message(exception_class):
     """Positional-message exceptions must store whatever message is passed."""
-    custom_msg = f"Custom message for {exception_class.__name__}"
+    custom_msg = fake.sentence()
     exc = exception_class(custom_msg)
     assert exc.message == custom_msg, (
         f"Expected message '{custom_msg}', got '{exc.message}'"
@@ -339,7 +338,7 @@ def test_simple_exception_accepts_custom_message(exception_class):
 )
 def test_parameterized_exception_accepts_custom_message(exception_class):
     """Keyword-message exceptions must store whatever message is passed."""
-    custom_msg = f"Custom message for {exception_class.__name__}"
+    custom_msg = fake.sentence()
     exc = exception_class(message=custom_msg)
     assert exc.message == custom_msg, (
         f"Expected message '{custom_msg}', got '{exc.message}'"

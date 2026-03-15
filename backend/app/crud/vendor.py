@@ -13,11 +13,13 @@ def get_vendor_by_email(cursor: Cursor, email: str) -> dict[str, Any] | None:
     Returns:
         dict[str, Any] | None: The vendor row or None.
     """
-    cursor.execute(
-        'SELECT "id", "email", "password_hash" '
-        'FROM app."vendors" '
-        'WHERE LOWER("email") = LOWER(%s) '
-        'AND "deleted_at" IS NULL',
+    cursor.execute(  # SQL
+        """
+        SELECT "id", "email", "password_hash"
+        FROM app."vendors"
+        WHERE LOWER("email") = LOWER(%s)
+        AND "deleted_at" IS NULL
+        """,
         (email,),
     )
     row = cursor.fetchone()
@@ -32,10 +34,12 @@ def get_vendor_by_id(cursor: Cursor, vendor_id: str) -> dict[str, Any] | None:
     Returns:
         dict[str, Any] | None: The vendor row or None.
     """
-    cursor.execute(
-        'SELECT "id", "email" '
-        'FROM app."vendors" '
-        'WHERE "id" = %s AND "deleted_at" IS NULL',
+    cursor.execute(  # SQL
+        """
+        SELECT "id", "email"
+        FROM app."vendors"
+        WHERE "id" = %s AND "deleted_at" IS NULL
+        """,
         (vendor_id,),
     )
     row = cursor.fetchone()
@@ -56,11 +60,13 @@ def create_vendor(
     Returns:
         dict[str, Any] | None: The created vendor row, or None on conflict.
     """
-    cursor.execute(
-        'INSERT INTO app."vendors" ("email", "password_hash") '
-        "VALUES (%s, %s) "
-        'ON CONFLICT ((LOWER("email"))) DO NOTHING '
-        'RETURNING "id", "email"',
+    cursor.execute(  # SQL
+        """
+        INSERT INTO app."vendors" ("email", "password_hash")
+        VALUES (%s, %s)
+        ON CONFLICT (LOWER("email")) DO NOTHING
+        RETURNING "id", "email"
+        """,
         (email, password_hash),
     )
     row = cursor.fetchone()

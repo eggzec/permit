@@ -1,13 +1,8 @@
-"""
-Unit tests for Pydantic response schemas in app.schemas.response.
-
-Covers: ErrorBodyResponse field storage, required-field enforcement,
-details defaulting, ErrorResponse envelope shape, and ErrorDetail validation.
-"""
-
 import pytest
+from faker import Faker
 from fastapi import status
 from pydantic import ValidationError
+from uuid6 import uuid7
 
 from app.schemas.response import (
     ErrorBodyResponse,
@@ -15,6 +10,9 @@ from app.schemas.response import (
     ErrorDetail,
     ErrorResponse,
 )
+
+
+fake = Faker()
 
 
 # ---------------------------------------------------------------------------
@@ -25,18 +23,20 @@ from app.schemas.response import (
 @pytest.mark.unit
 def test_error_body_response_stores_all_fields():
     """ErrorBodyResponse must accept and round-trip all fields."""
+    msg = fake.sentence()
+    request_id = str(uuid7())
     error_body = ErrorBodyResponse(
         code=ErrorCode.VALIDATION_FAILED,
-        message="Test message",
+        message=msg,
         http_status=status.HTTP_400_BAD_REQUEST,
         details=[],
-        request_id="req-123",
+        request_id=request_id,
     )
     assert error_body.code == ErrorCode.VALIDATION_FAILED, (
         f"Expected code VALIDATION_FAILED, got {error_body.code}"
     )
-    assert error_body.message == "Test message", (
-        f"Expected message 'Test message', got '{error_body.message}'"
+    assert error_body.message == msg, (
+        f"Expected message '{msg}', got '{error_body.message}'"
     )
     assert error_body.http_status == status.HTTP_400_BAD_REQUEST, (
         f"Expected http_status 400, got {error_body.http_status}"
@@ -44,8 +44,8 @@ def test_error_body_response_stores_all_fields():
     assert error_body.details == [], (
         f"Expected empty details, got {error_body.details}"
     )
-    assert error_body.request_id == "req-123", (
-        f"Expected request_id 'req-123', got '{error_body.request_id}'"
+    assert error_body.request_id == request_id, (
+        f"Expected request_id '{request_id}', got '{error_body.request_id}'"
     )
 
 
@@ -73,6 +73,7 @@ def test_error_body_response_stores_all_fields():
 )
 def test_error_body_response_required_field_raises_validation_error(kwargs):
     """Omitting a required field must raise ValidationError."""
+    # We keep static messages in parametrize for simplicity
     with pytest.raises(ValidationError) as exc_info:
         ErrorBodyResponse(**kwargs)
     # Optionally verify the missing field is in the error
@@ -88,9 +89,9 @@ def test_error_body_response_details_default_to_empty_list():
     """Omitting details when constructing ErrorBodyResponse must yield []."""
     body = ErrorBodyResponse(
         code=ErrorCode.VALIDATION_FAILED,
-        message="Test",
+        message=fake.sentence(),
         http_status=status.HTTP_400_BAD_REQUEST,
-        request_id="req-1",
+        request_id=str(uuid7()),
     )
     assert body.details == [], (
         f"Expected empty details list by default, got {body.details}"
@@ -108,9 +109,9 @@ def test_error_response_envelope_structure():
     error_response = ErrorResponse(
         error=ErrorBodyResponse(
             code=ErrorCode.VALIDATION_FAILED,
-            message="Test",
+            message=fake.sentence(),
             http_status=status.HTTP_400_BAD_REQUEST,
-            request_id="req-123",
+            request_id=str(uuid7()),
         )
     )
     assert isinstance(error_response.error, ErrorBodyResponse), (
@@ -132,30 +133,33 @@ def test_error_response_envelope_structure():
 def test_error_detail_requires_message_field():
     """ErrorDetail without message must raise ValidationError."""
     with pytest.raises(ValidationError):
-        ErrorDetail(field="test_field")  # missing required 'message'
+        ErrorDetail(field=fake.word())  # missing required 'message'
 
 
 @pytest.mark.unit
 def test_error_detail_accepts_field_as_none():
     """ErrorDetail.field is optional — None must be stored as-is."""
-    detail = ErrorDetail(field=None, message="Test error")
+    msg = fake.sentence()
+    detail = ErrorDetail(field=None, message=msg)
     assert detail.field is None, (
         f"Expected field to be None, got {detail.field}"
     )
-    assert detail.message == "Test error", (
-        f"Expected message 'Test error', got '{detail.message}'"
+    assert detail.message == msg, (
+        f"Expected message '{msg}', got '{detail.message}'"
     )
 
 
 @pytest.mark.unit
 def test_error_detail_with_both_fields_populated():
     """ErrorDetail must store both field and message when both are provided."""
-    detail = ErrorDetail(field="email", message="Invalid email format")
-    assert detail.field == "email", (
-        f"Expected field 'email', got '{detail.field}'"
+    field = fake.word()
+    msg = fake.sentence()
+    detail = ErrorDetail(field=field, message=msg)
+    assert detail.field == field, (
+        f"Expected field '{field}', got '{detail.field}'"
     )
-    assert detail.message == "Invalid email format", (
-        f"Expected message 'Invalid email format', got '{detail.message}'"
+    assert detail.message == msg, (
+        f"Expected message '{msg}', got '{detail.message}'"
     )
 
 
@@ -171,9 +175,9 @@ def test_error_body_response_rejects_invalid_error_code():
     with pytest.raises(ValidationError):
         ErrorBodyResponse(
             code="NOT_A_REAL_CODE",
-            message="Test",
+            message=fake.sentence(),
             http_status=status.HTTP_400_BAD_REQUEST,
-            request_id="req-1",
+            request_id=str(uuid7()),
         )
 
 

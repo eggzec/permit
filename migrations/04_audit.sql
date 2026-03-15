@@ -109,7 +109,7 @@ SET LOCAL ROLE "audit_owner";
 --   MODIFIED:
 --     {"metadata": <old_jsonb_value>}
 --     {"device_fingerprint_hash": "<old_hash>"}
---     {"license_key": "rotated"}  -- value never recorded
+--     {"activation_code": "rotated"}  -- value never recorded
 --   TOKEN_ROTATED: null — fact of rotation is sufficient
 --   PASSWORD_CHANGED: null — hash values never recorded
 --
