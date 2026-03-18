@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import psycopg
 import psycopg.rows
 import pytest
 

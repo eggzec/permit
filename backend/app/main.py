@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:  # noqa: RUF029
     logger.info("Settings initialized")
 
     logger.info("Initializing database pool")
-    pool = ConnectionPool(str(settings.DATABASE_DSN))
+    pool = ConnectionPool(str(settings.DATABASE_DSN), open=True)
 
     # Connectivity check
     try:

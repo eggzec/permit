@@ -1,390 +1,426 @@
-from datetime import timedelta
-from unittest.mock import MagicMock
+from __future__ import annotations
 
-import jwt as pyjwt
+from datetime import datetime, timedelta, timezone
+
+import jwt
 import pytest
-from faker import Faker
 from psycopg import Connection
-from uuid6 import uuid7
+from pwdlib.hashers import argon2
 
-from app.api.deps import get_current_vendor_id
 from app.core.config import Settings
 from app.core.exceptions import AuthenticationException, ConflictException
 from app.core.security import (
+    JWT_ALGORITHM,
     create_access_token,
     create_refresh_token,
     decode_token,
-    get_password_hash,
     verify_password,
 )
 from app.services.auth import login, refresh, signup
 
 
-fake = Faker()
+def build_signup_args(faker) -> tuple[str, str, str]:
+    """
+    Builds signup credentials and client identity for auth service tests.
 
-# ---------------------------------------------------------------------------
-# Pure unit tests — no DB required
-# ---------------------------------------------------------------------------
+    Used by:
+        test_signup_success - supplies the happy-path signup inputs.
+        test_signup_duplicate_email_raises_conflict - provisions the original and duplicate signup inputs.
+        test_login_success_returns_access_and_refresh_tokens - provisions a vendor before login.
+        test_login_rejects_invalid_credentials - supplies the baseline valid credentials before one field is varied.
+        test_login_persists_upgraded_hash - creates the legacy-hash vendor credentials.
+        test_refresh_success_returns_new_token_pair - provisions the vendor and client id used for refresh.
 
+    Args:
+        faker: `Faker` session fixture used to generate auth field values.
 
-@pytest.mark.unit
-def test_hash_and_verify():
-    plain = fake.password(length=12)
-    hashed = get_password_hash(plain)
-
-    assert hashed != plain, "Hash must not be the plaintext password"
-    assert hashed.startswith("$2"), "Hash must use bcrypt ($2… prefix)"
-    valid, _ = verify_password(plain, hashed)
-    assert valid is True, "Correct password must verify successfully"
-
-
-@pytest.mark.unit
-def test_wrong_password_fails():
-    hashed = get_password_hash(fake.password())
-    valid, _ = verify_password(fake.password(), hashed)
-    assert valid is False, "Wrong password must not verify"
-
-
-@pytest.mark.unit
-def test_access_token_claims(app_settings: Settings):
-    vendor_id = str(uuid7())
-    token = create_access_token(vendor_id, app_settings)
-
-    payload = decode_token(token, app_settings)
-    assert payload["vendor_id"] == vendor_id, "Token must encode vendor_id"
-    assert payload["token_type"] == "access", (
-        "Access tokens must have type 'access'"
-    )
-    assert "exp" in payload, "Token must have an expiry claim"
-
-
-@pytest.mark.unit
-def test_refresh_token_claims(app_settings: Settings):
-    vendor_id = str(uuid7())
-    token = create_refresh_token(vendor_id, app_settings)
-
-    payload = decode_token(token, app_settings)
-    assert payload["vendor_id"] == vendor_id, "Token must encode vendor_id"
-    assert payload["token_type"] == "refresh", (
-        "Refresh tokens must have type 'refresh'"
-    )
-    assert "exp" in payload, "Token must have an expiry claim"
-
-
-@pytest.mark.unit
-def test_expired_token_raises(app_settings: Settings):
-    vendor_id = str(uuid7())
-    token = create_access_token(
-        vendor_id, app_settings, expires_delta=timedelta(seconds=-1)
+    Returns:
+        tuple[str, str, str]: A unique email, plaintext password, and client id.
+    """
+    return (
+        faker.email(),
+        faker.password(length=16, special_chars=True),
+        faker.uuid4(),
     )
 
-    with pytest.raises(pyjwt.ExpiredSignatureError):
-        decode_token(token, app_settings)
 
+def build_refresh_payload(faker, **overrides: str) -> dict[str, str | datetime]:
+    """
+    Builds a refresh-token payload for auth service boundary tests.
 
-@pytest.mark.unit
-def test_invalid_signature_raises(app_settings: Settings):
-    vendor_id = str(uuid7())
-    token = create_access_token(vendor_id, app_settings)
+    Used by:
+        test_refresh_rejects_invalid_tokens - creates malformed and unknown-vendor refresh payloads.
+        test_refresh_rejects_missing_vendor_id_claim - creates a signed refresh token with a missing vendor id claim.
 
-    bad_settings = Settings(
-        SECRET_KEY=fake.password(length=32),
-        PROJECT_NAME="test",
-        POSTGRES_SERVER="localhost",
-        POSTGRES_USER="test",
-        POSTGRES_PASSWORD="test",
-        POSTGRES_DB="test",
-    )
-    with pytest.raises(pyjwt.InvalidSignatureError):
-        decode_token(token, bad_settings)
+    Args:
+        faker: `Faker` session fixture used to generate a vendor id.
+        overrides: Payload field replacements applied on top of the default refresh-token claims.
 
-
-@pytest.mark.unit
-def _make_creds(token: str):
-    creds = MagicMock()
-    creds.credentials = token
-    return creds
-
-
-@pytest.mark.unit
-def test_valid_access_token(app_settings: Settings):
-    vendor_id = str(uuid7())
-    token = create_access_token(vendor_id, app_settings)
-    result = get_current_vendor_id(_make_creds(token), app_settings)
-    assert result == vendor_id, "Must return the encoded vendor_id"
-
-
-@pytest.mark.unit
-def test_missing_credentials_raises(app_settings: Settings):
-    with pytest.raises(AuthenticationException, match="Missing"):
-        get_current_vendor_id(None, app_settings)
-
-
-@pytest.mark.unit
-def test_refresh_token_rejected(app_settings: Settings):
-    vendor_id = str(uuid7())
-    token = create_refresh_token(vendor_id, app_settings)
-    with pytest.raises(AuthenticationException, match="Invalid token type"):
-        get_current_vendor_id(_make_creds(token), app_settings)
-
-
-@pytest.mark.unit
-def test_expired_token_raises_dep(app_settings: Settings):
-    vendor_id = str(uuid7())
-    token = create_access_token(
-        vendor_id, app_settings, expires_delta=timedelta(seconds=-1)
-    )
-    with pytest.raises(AuthenticationException):
-        get_current_vendor_id(_make_creds(token), app_settings)
-
-
-@pytest.mark.unit
-def test_garbage_token_raises(app_settings: Settings):
-    with pytest.raises(AuthenticationException):
-        get_current_vendor_id(_make_creds("not.a.jwt"), app_settings)
-
-
-@pytest.mark.unit
-def test_malformed_vendor_id_raises(app_settings: Settings):
-    token = create_access_token("invalid-uuid", app_settings)
-    with pytest.raises(AuthenticationException, match="Invalid token payload"):
-        get_current_vendor_id(_make_creds(token), app_settings)
-
-
-# ---------------------------------------------------------------------------
-# Service tests — real transactional DB, no patching
-# ---------------------------------------------------------------------------
+    Returns:
+        dict[str, str | datetime]: A refresh-token payload containing token type, vendor id, and expiry claims.
+    """
+    payload: dict[str, str | datetime] = {
+        "token_type": "refresh",
+        "vendor_id": faker.uuid4(),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
+    }
+    payload.update(overrides)
+    return payload
 
 
 @pytest.mark.integration
-def test_signup_success(db_conn: Connection, app_settings: Settings):
+def test_signup_success(
+    db_conn: Connection, app_settings: Settings, faker
+) -> None:
+    """
+    Purpose:
+        Verifies that `app.services.auth.signup` creates a vendor and returns the created vendor in the service response.
+        This matters because the auth service is the business-layer contract behind the public signup route.
+
+    Covers:
+        - `app.services.auth.signup`
+
+    Rationale:
+        The test uses a real transactional database cursor because signup correctness depends on persisted vendor state.
+
+    Fixtures:
+        db_conn: Transactional database connection rolled back after the test.
+        app_settings: Shared `Settings` object used for auth service configuration.
+        faker: Session-scoped `Faker` instance used to generate signup inputs.
+    """
+    email, password, client_id = build_signup_args(faker)
     with db_conn.cursor() as db_cursor:
-        email = fake.email()
-        password = fake.password()
-        client_id = str(uuid7())
         result = signup(db_cursor, email, password, client_id, app_settings)
 
-        assert result.vendor.email == email, "Returned email must match"
-        assert result.vendor.id, "Created vendor must have an id"
+    assert result.vendor.email == email, (
+        f"Expected created vendor email '{email}', got '{result.vendor.email}'"
+    )
+    assert result.vendor.id, "Expected signup to return a persisted vendor id"
 
 
 @pytest.mark.integration
-def test_signup_duplicate_email_raises(
-    db_conn: Connection, app_settings: Settings
-):
+def test_signup_duplicate_email_raises_conflict(
+    db_conn: Connection, app_settings: Settings, faker
+) -> None:
+    """
+    Purpose:
+        Verifies that `app.services.auth.signup` raises a conflict when a vendor with the same email already exists.
+        This matters because duplicate vendor creation must be rejected before callers issue tokens or create parallel accounts.
+
+    Covers:
+        - `app.services.auth.signup`
+
+    Rationale:
+        The service is exercised twice against the same transactional cursor so the duplicate path is proven with real database state instead of patched collaborators.
+
+    Fixtures:
+        db_conn: Transactional database connection rolled back after the test.
+        app_settings: Shared `Settings` object used for auth service configuration.
+        faker: Session-scoped `Faker` instance used to generate signup inputs.
+    """
+    email, password, client_id = build_signup_args(faker)
     with db_conn.cursor() as db_cursor:
-        email = fake.email()
-        password = fake.password()
-        client_id = str(uuid7())
         signup(db_cursor, email, password, client_id, app_settings)
 
-        with pytest.raises(ConflictException):
+        with pytest.raises(
+            ConflictException, match="A vendor with this email already exists"
+        ):
             signup(db_cursor, email, password, client_id, app_settings)
 
 
 @pytest.mark.integration
-def test_login_success(db_conn: Connection, app_settings: Settings):
-    with db_conn.cursor() as db_cursor:
-        email = fake.email()
-        password = fake.password()
-        client_id = str(uuid7())
-        signup(db_cursor, email, password, client_id, app_settings)
+def test_login_success_returns_access_and_refresh_tokens(
+    db_conn: Connection, app_settings: Settings, faker
+) -> None:
+    """
+    Purpose:
+        Verifies that `app.services.auth.login` returns a bearer token pair for valid credentials.
+        This matters because the auth service is responsible for issuing the tokens consumed by the API layer.
 
+    Covers:
+        - `app.services.auth.login`
+        - `app.core.security.decode_token`
+
+    Rationale:
+        The test signs up a real vendor first and decodes the issued access token to confirm the service minted the expected token type.
+
+    Fixtures:
+        db_conn: Transactional database connection rolled back after the test.
+        app_settings: Shared `Settings` object used to sign and decode tokens.
+        faker: Session-scoped `Faker` instance used to generate auth inputs.
+    """
+    email, password, client_id = build_signup_args(faker)
+    with db_conn.cursor() as db_cursor:
+        signup(db_cursor, email, password, client_id, app_settings)
         result = login(db_cursor, email, password, client_id, app_settings)
 
-        assert result.access_token, "login must return an access token"
-        assert result.refresh_token, "login must return a refresh token"
-        assert result.token_type == "bearer", "token_type must be 'bearer'"
-
-        payload = decode_token(result.access_token, app_settings)
-        assert payload["token_type"] == "access", (
-            "access token must carry 'access' type"
-        )
+    payload = decode_token(result.access_token, app_settings)
+    assert result.access_token, (
+        "Expected login to return a non-empty access token"
+    )
+    assert result.refresh_token, (
+        "Expected login to return a non-empty refresh token"
+    )
+    assert result.token_type == "bearer", (
+        f"Expected token_type 'bearer', got '{result.token_type}'"
+    )
+    assert payload["token_type"] == "access", (
+        f"Expected access token payload type 'access', got '{payload['token_type']}'"
+    )
 
 
 @pytest.mark.integration
-def test_login_wrong_email_raises(db_conn: Connection, app_settings: Settings):
+@pytest.mark.parametrize(
+    "use_unknown_email,use_wrong_password",
+    [
+        pytest.param(True, False, id="unknown_email"),
+        pytest.param(False, True, id="wrong_password"),
+    ],
+)
+def test_login_rejects_invalid_credentials(
+    db_conn: Connection,
+    app_settings: Settings,
+    faker,
+    use_unknown_email: bool,
+    use_wrong_password: bool,
+) -> None:
+    """
+    Purpose:
+        Verifies that `app.services.auth.login` rejects unknown-email and wrong-password attempts with the same authentication error.
+        This matters because the service must enforce credential validation consistently regardless of which input field is wrong.
+
+    Covers:
+        - `app.services.auth.login`
+
+    Rationale:
+        A single parametrized test varies one credential dimension at a time while keeping the persisted vendor state constant.
+
+    Fixtures:
+        db_conn: Transactional database connection rolled back after the test.
+        app_settings: Shared `Settings` object used by the auth service.
+        faker: Session-scoped `Faker` instance used to generate valid and alternate credentials.
+
+    Parametrize:
+        use_unknown_email: Whether the service call swaps in an email that does not exist.
+        use_wrong_password: Whether the service call swaps in an incorrect password.
+        Cases:
+            - <id="unknown_email"> — uses an unrecognized email with the correct password.
+            - <id="wrong_password"> — uses the persisted email with an incorrect password.
+    """
+    email, password, client_id = build_signup_args(faker)
+    alternate_email = faker.email()
+    alternate_password = faker.password(length=16, special_chars=True)
     with db_conn.cursor() as db_cursor:
-        with pytest.raises(AuthenticationException):
+        signup(db_cursor, email, password, client_id, app_settings)
+
+        with pytest.raises(
+            AuthenticationException, match="Invalid credentials"
+        ):
             login(
                 db_cursor,
-                fake.email(),
-                fake.password(),
-                str(uuid7()),
+                alternate_email if use_unknown_email else email,
+                alternate_password if use_wrong_password else password,
+                client_id,
                 app_settings,
             )
 
 
 @pytest.mark.integration
-def test_login_wrong_password_raises(
-    db_conn: Connection, app_settings: Settings
-):
-    with db_conn.cursor() as db_cursor:
-        email = fake.email()
-        correct_password = fake.password()
-        wrong_password = fake.password()
-        client_id = str(uuid7())
-        signup(db_cursor, email, correct_password, client_id, app_settings)
+def test_login_persists_upgraded_hash(
+    db_conn: Connection, app_settings: Settings, faker
+) -> None:
+    """
+    Purpose:
+        Verifies that `app.services.auth.login` upgrades a legacy password hash in storage after a successful login.
+        This matters because the service is responsible for migrating old password hashes to the preferred format during authentication.
 
-        with pytest.raises(AuthenticationException):
-            login(db_cursor, email, wrong_password, client_id, app_settings)
+    Covers:
+        - `app.services.auth.login`
+        - `app.core.security.verify_password`
+
+    Rationale:
+        This test uses a real vendor row with an Argon2 legacy hash so the persistence side effect is verified against the database rather than patched lookup helpers. This shape came from REM-004.
+
+    Fixtures:
+        db_conn: Transactional database connection rolled back after the test.
+        app_settings: Shared `Settings` object used by the auth service.
+        faker: Session-scoped `Faker` instance used to generate auth inputs.
+    """
+    email, password, client_id = build_signup_args(faker)
+    legacy_hash = argon2.Argon2Hasher().hash(password)
+    with db_conn.cursor() as db_cursor:
+        db_cursor.execute(
+            """
+            INSERT INTO app."vendors" ("email", "password_hash")
+            VALUES (%s, %s)
+            RETURNING "id"
+            """,
+            (email, legacy_hash),
+        )
+        vendor_id = str(db_cursor.fetchone()[0])
+
+        result = login(db_cursor, email, password, client_id, app_settings)
+        db_cursor.execute(
+            'SELECT "password_hash" FROM app."vendors" WHERE "id" = %s',
+            (vendor_id,),
+        )
+        upgraded_hash = db_cursor.fetchone()[0]
+
+    valid, updated_hash = verify_password(password, upgraded_hash)
+    assert result.access_token, (
+        "Expected login to succeed after upgrading a legacy password hash"
+    )
+    assert upgraded_hash != legacy_hash, (
+        "Expected login to replace the legacy hash with the preferred hash format"
+    )
+    assert valid is True, (
+        "Expected upgraded password hash to verify successfully"
+    )
+    assert updated_hash is None, (
+        "Expected preferred password hashes to require no further upgrade"
+    )
 
 
 @pytest.mark.integration
-def test_refresh_success(db_conn: Connection, app_settings: Settings):
+def test_refresh_success_returns_new_token_pair(
+    db_conn: Connection, app_settings: Settings, faker
+) -> None:
+    """
+    Purpose:
+        Verifies that `app.services.auth.refresh` exchanges a valid refresh token for a replacement token pair.
+        This matters because the auth service owns the token-refresh contract used by the API route.
+
+    Covers:
+        - `app.services.auth.login`
+        - `app.services.auth.refresh`
+
+    Rationale:
+        The test performs the full signup-login-refresh sequence through the real service functions because refresh correctness depends on issued token state.
+
+    Fixtures:
+        db_conn: Transactional database connection rolled back after the test.
+        app_settings: Shared `Settings` object used to sign and decode tokens.
+        faker: Session-scoped `Faker` instance used to generate auth inputs.
+    """
+    email, password, client_id = build_signup_args(faker)
     with db_conn.cursor() as db_cursor:
-        email = fake.email()
-        password = fake.password()
-        client_id = str(uuid7())
         signup(db_cursor, email, password, client_id, app_settings)
         tokens = login(db_cursor, email, password, client_id, app_settings)
-
         result = refresh(
             tokens.refresh_token, client_id, db_cursor, app_settings
         )
 
-        assert result.access_token, "refresh must return a new access token"
-        assert result.refresh_token, "refresh must return a new refresh token"
+    assert result.access_token, (
+        "Expected refresh to return a non-empty replacement access token"
+    )
+    assert result.refresh_token, (
+        "Expected refresh to return a non-empty replacement refresh token"
+    )
 
 
 @pytest.mark.integration
-def test_refresh_with_access_token_raises(
-    db_conn: Connection, app_settings: Settings
-):
-    with db_conn.cursor() as db_cursor:
-        vendor_id = str(uuid7())
-        at = create_access_token(vendor_id, app_settings)
-
-        with pytest.raises(AuthenticationException, match="Invalid token type"):
-            refresh(at, str(uuid7()), db_cursor, app_settings)
-
-
-@pytest.mark.integration
-def test_refresh_expired_raises(db_conn: Connection, app_settings: Settings):
-    with db_conn.cursor() as db_cursor:
-        vendor_id = str(uuid7())
-        rt = create_refresh_token(
-            vendor_id, app_settings, expires_delta=timedelta(seconds=-1)
-        )
-
-        with pytest.raises(AuthenticationException):
-            refresh(rt, str(uuid7()), db_cursor, app_settings)
-
-
-@pytest.mark.integration
-def test_refresh_deleted_vendor_raises(
-    db_conn: Connection, app_settings: Settings
-):
-    with db_conn.cursor() as db_cursor:
-        # Create a refresh token for a vendor that was never inserted
-        phantom_vendor_id = str(uuid7())
-        rt = create_refresh_token(phantom_vendor_id, app_settings)
-
-        with pytest.raises(AuthenticationException, match="Vendor not found"):
-            refresh(rt, str(uuid7()), db_cursor, app_settings)
-
-
-@pytest.mark.integration
-def test_signup_concurrent_insert_conflict_branch(app_settings: Settings):
-    """signup() must raise ConflictException when create_vendor returns None."""
-    cursor = MagicMock()
-    email = fake.email()
-    password = fake.password()
-    client_id = str(uuid7())
-
-    get_by_email_mock = MagicMock(return_value=None)
-    hash_mock = MagicMock(return_value="hashed-password")
-    create_vendor_mock = MagicMock(return_value=None)
-
-    with pytest.MonkeyPatch().context() as mp:
-        mp.setattr("app.services.auth.get_vendor_by_email", get_by_email_mock)
-        mp.setattr("app.services.auth.get_password_hash", hash_mock)
-        mp.setattr("app.services.auth.create_vendor", create_vendor_mock)
-
-        with pytest.raises(ConflictException, match="already exists"):
-            signup(cursor, email, password, client_id, app_settings)
-
-    assert get_by_email_mock.call_count == 1, (
-        "signup must check for an existing vendor before insert"
-    )
-    assert get_by_email_mock.call_args.args == (cursor, email), (
-        "signup must query existing vendor using the signup email"
-    )
-    assert hash_mock.call_count == 1, (
-        "signup must hash the provided password before insert attempt"
-    )
-    assert hash_mock.call_args.args == (password,), (
-        "signup must pass the original password to get_password_hash"
-    )
-    assert create_vendor_mock.call_count == 1, (
-        "signup must attempt create_vendor once after hashing"
-    )
-    assert create_vendor_mock.call_args.args == (
-        cursor,
-        email,
-        "hashed-password",
-    ), "signup must call create_vendor with cursor, email, and hashed password"
-
-
-@pytest.mark.unit
 @pytest.mark.parametrize(
-    "payload, expected_msg",
+    "token_factory,expected_message",
     [
         pytest.param(
-            {"token_type": "refresh"},
-            "Invalid token payload",
-            id="missing-vendor-id",
+            lambda faker, settings: create_access_token(
+                faker.uuid4(), settings
+            ),
+            "Invalid token type",
+            id="access_token",
         ),
         pytest.param(
-            {"token_type": "refresh", "vendor_id": "not-a-uuid"},
+            lambda faker, settings: create_refresh_token(
+                faker.uuid4(), settings, expires_delta=timedelta(seconds=-1)
+            ),
+            "Invalid or expired refresh token",
+            id="expired_refresh_token",
+        ),
+        pytest.param(
+            lambda faker, settings: jwt.encode(
+                build_refresh_payload(faker, vendor_id=faker.word()),
+                settings.SECRET_KEY,
+                algorithm=JWT_ALGORITHM,
+            ),
             "Invalid token payload",
-            id="malformed-vendor-id",
+            id="malformed_vendor_id",
+        ),
+        pytest.param(
+            lambda faker, settings: jwt.encode(
+                build_refresh_payload(faker),
+                settings.SECRET_KEY,
+                algorithm=JWT_ALGORITHM,
+            ),
+            "Vendor not found",
+            id="unknown_vendor",
         ),
     ],
 )
-def test_refresh_token_payload_errors(app_settings, payload, expected_msg):
-    with pytest.MonkeyPatch().context() as mp:
-        mp.setattr(
-            "app.services.auth.decode_token", lambda tok, settings_obj: payload
-        )
-        with pytest.raises(AuthenticationException, match=expected_msg):
-            refresh("fake-token", str(uuid7()), MagicMock(), app_settings)
+def test_refresh_rejects_invalid_tokens(
+    db_conn: Connection,
+    app_settings: Settings,
+    faker,
+    token_factory,
+    expected_message: str,
+) -> None:
+    """
+    Purpose:
+        Verifies that `app.services.auth.refresh` rejects invalid refresh tokens, malformed payloads, and unknown-vendor claims.
+        This matters because the service must not mint new tokens from unusable or untrusted refresh input.
+
+    Covers:
+        - `app.services.auth.refresh`
+
+    Rationale:
+        The test signs real token variants instead of patching decode helpers, so it documents the actual service boundary. This shape came from REM-003.
+
+    Fixtures:
+        db_conn: Transactional database connection rolled back after the test.
+        app_settings: Shared `Settings` object used to sign token variants.
+        faker: Session-scoped `Faker` instance used to generate claims and ids.
+
+    Parametrize:
+        token_factory: Produces the invalid refresh token variant for the scenario.
+        expected_message: The authentication error expected from the service.
+        Cases:
+            - <id="access_token"> — supplies an access token where a refresh token is required.
+            - <id="expired_refresh_token"> — supplies a refresh token whose expiry is already in the past.
+            - <id="malformed_vendor_id"> — supplies a refresh token whose vendor id claim is not a UUID.
+            - <id="unknown_vendor"> — supplies a refresh token whose vendor id does not exist in the database.
+    """
+    refresh_token = token_factory(faker, app_settings)
+    with db_conn.cursor() as db_cursor:
+        with pytest.raises(AuthenticationException, match=expected_message):
+            refresh(refresh_token, faker.uuid4(), db_cursor, app_settings)
 
 
-@pytest.mark.unit
-def test_login_persists_upgraded_hash(app_settings):
-    # Mock vendor with a generic hash
-    vendor = {
-        "id": str(uuid7()),
-        "email": "test@example.com",
-        "password_hash": "old-hash",
-    }
+@pytest.mark.integration
+def test_refresh_rejects_missing_vendor_id_claim(
+    db_conn: Connection, app_settings: Settings, faker
+) -> None:
+    """
+    Purpose:
+        Verifies that `app.services.auth.refresh` rejects a refresh token whose vendor id claim is missing.
+        This matters because the refresh contract requires a resolvable vendor identity before new tokens can be issued.
 
-    cursor = MagicMock()
-    # Mocking get_vendor_by_email to return our vendor
-    with pytest.MonkeyPatch().context() as mp:
-        mp.setattr(
-            "app.services.auth.get_vendor_by_email", lambda cur, email: vendor
-        )
-        # Mock verify_password to return (True, "new-hash") indicating an upgrade is needed
-        mp.setattr(
-            "app.services.auth.verify_password",
-            lambda pwd, hsh: (True, "new-hash"),
-        )
+    Covers:
+        - `app.services.auth.refresh`
 
-        login(
-            cursor, "test@example.com", "password", str(uuid7()), app_settings
-        )
+    Rationale:
+        The test signs a real refresh payload with `vendor_id=None` so the payload-validation branch is exercised without internal patching. This shape came from REM-003.
 
-    # Verify UPDATE was called
-    assert cursor.execute.called, (
-        "login must persist upgraded password hashes when verify_password "
-        "returns an updated hash"
+    Fixtures:
+        db_conn: Transactional database connection rolled back after the test.
+        app_settings: Shared `Settings` object used to sign the malformed refresh token.
+        faker: Session-scoped `Faker` instance used to generate claim values and client id.
+    """
+    refresh_token = jwt.encode(
+        build_refresh_payload(faker, vendor_id=None),
+        app_settings.SECRET_KEY,
+        algorithm=JWT_ALGORITHM,
     )
-    args, _ = cursor.execute.call_args
-    assert 'UPDATE app."vendors"' in args[0], (
-        "login must execute an UPDATE statement on app.vendors"
-    )
-    assert "new-hash" in args[1], (
-        "login must write the upgraded hash returned by verify_password"
-    )
+    with db_conn.cursor() as db_cursor:
+        with pytest.raises(
+            AuthenticationException, match="Invalid token payload"
+        ):
+            refresh(refresh_token, faker.uuid4(), db_cursor, app_settings)

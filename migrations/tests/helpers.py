@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import shlex
 import re
+import shlex
 import time
 import uuid
 from datetime import datetime, timezone
@@ -128,14 +128,14 @@ def insert_license(
 def insert_node_locked(
     conn: psycopg.Connection,
     license_id: uuid.UUID,
-    license_key: str,
+    activation_code: str,
     max_sessions: int = 1,
 ) -> None:
     conn.execute(
         'INSERT INTO app."node_locked_license_data" '
-        '("license_id", "license_key", "max_sessions") '
+        '("license_id", "activation_code", "max_sessions") '
         "VALUES (%s, %s, %s)",
-        (license_id, license_key, max_sessions),
+        (license_id, activation_code, max_sessions),
     )
 
 

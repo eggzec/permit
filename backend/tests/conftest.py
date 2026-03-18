@@ -5,9 +5,8 @@ Fixture hierarchy
 pg_container   (session) — one Postgres Testcontainer per session
 migrated_db_pool (session) — ConnectionPool over the container
 app_settings    (session) — Settings with known test secrets
+faker          (session) — reproducible Faker seeded per xdist worker
 db_conn          (function) — connection with force_rollback=True (no leaks)
-client           (function) — FastAPI TestClient with dependency overrides
-                              pointing at the same transactional db_conn
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ import typing
 from pathlib import Path
 
 import pytest
+from faker import Faker
 from fastapi import APIRouter as _APIRouter
 from psycopg import Connection, Cursor
 from psycopg_pool import ConnectionPool
@@ -39,6 +39,26 @@ from app.main import app
 MIGRATIONS_DIR = str(Path(__file__).parents[2] / "migrations")
 POSTGRES_IMAGE = "postgres:18.2-alpine3.23"
 API_V1 = "/api/v1"
+
+
+def xdist_worker_offset() -> int:
+    """
+    Returns the numeric xdist worker offset used to derive a stable Faker seed.
+
+    Used by:
+        faker - offsets the shared base seed so parallel workers do not reuse identical fake data streams.
+
+    Args:
+        None.
+
+    Returns:
+        int: The parsed xdist worker number, or `0` for the master process and unknown names.
+    """
+    worker_name = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    if worker_name == "master":
+        return 0
+    suffix = worker_name.removeprefix("gw")
+    return int(suffix) if suffix.isdigit() else 0
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +106,23 @@ class PgReadyWaitStrategy(WaitStrategy):
 
 @pytest.fixture(scope="session")
 def pg_container() -> typing.Generator[PostgresContainer, None, None]:
-    """Session: Testcontainers Postgres with all migrations applied."""
+    """
+    Provides a PostgreSQL Testcontainer with the backend migrations applied.
+
+    Scope: session — the container is expensive to start and tests do not mutate the container definition itself.
+
+    Provides:
+        A started `PostgresContainer` whose connection details are exported into the process environment for `Settings`.
+
+    Dependencies:
+        None.
+
+    Teardown:
+        The context manager stops the container after the test session ends.
+
+    Note:
+        This fixture shares the same database container across the session; write isolation must come from `db_conn`, not from restarting the container.
+    """
     with (
         PostgresContainer(POSTGRES_IMAGE, driver=None)
         .with_volume_mapping(
@@ -106,7 +142,23 @@ def pg_container() -> typing.Generator[PostgresContainer, None, None]:
 
 @pytest.fixture(scope="session")
 def migrated_db_pool(pg_container: PostgresContainer):
-    """Session: connection pool over the test container."""
+    """
+    Provides a connection pool bound to the migrated PostgreSQL test container.
+
+    Scope: session — opening the pool is expensive and tests safely share it through function-scoped transactions.
+
+    Provides:
+        An open `ConnectionPool` configured against the test container database.
+
+    Dependencies:
+        pg_container: Supplies the live PostgreSQL test container and its connection URL.
+
+    Teardown:
+        The context manager closes the pool after the session completes.
+
+    Note:
+        This fixture is read-write, but individual tests must isolate writes through `db_conn`.
+    """
     with ConnectionPool(
         pg_container.get_connection_url(),
         min_size=4,
@@ -119,15 +171,71 @@ def migrated_db_pool(pg_container: PostgresContainer):
 
 @pytest.fixture(scope="session")
 def app_settings(pg_container: PostgresContainer) -> Settings:
-    """Session: shared Settings for test JWTs and config.
-    Instantiated after pg_container is ready to ensure environment chemicals (ports) are correct.
+    """
+    Provides a shared `Settings` instance configured from the test container environment.
+
+    Scope: session — configuration is immutable for the duration of the suite and is safe to reuse.
+
+    Provides:
+        A `Settings` object with deterministic test secrets and database connection values.
+
+    Dependencies:
+        pg_container: Ensures the environment variables reflect the live container ports and credentials before settings are instantiated.
+
+    Teardown:
+        None.
+
+    Note:
+        Tests that need per-request database state should not mutate this object.
     """
     return Settings()
 
 
+@pytest.fixture(scope="session")
+def faker() -> Faker:
+    """
+    Provides a session-scoped Faker instance with a stable worker-aware seed.
+
+    Scope: session — the faker object is reused safely and deterministic seeding is part of the test contract.
+
+    Provides:
+        A `Faker` instance seeded from `PYTEST_RANDOMLY_SEED` plus the current xdist worker offset.
+
+    Dependencies:
+        None.
+
+    Teardown:
+        None.
+
+    Note:
+        Parallel workers intentionally receive different offsets so generated values remain reproducible without colliding across workers.
+    """
+    base_seed = int(os.environ.get("PYTEST_RANDOMLY_SEED", "20260318"))
+    seed = base_seed + xdist_worker_offset()
+    fake = Faker()
+    fake.seed_instance(seed)
+    return fake
+
+
 @pytest.fixture(scope="session", autouse=True)
-def _setup_session_overrides(app_settings: Settings) -> None:
-    """Apply session-wide dependency overrides."""
+def setup_session_overrides(app_settings: Settings) -> None:
+    """
+    Applies the session-wide FastAPI dependency override for shared settings.
+
+    Scope: session — the settings override is immutable and should remain installed for the whole run.
+
+    Provides:
+        `None`; it installs `get_settings` into `app.dependency_overrides`.
+
+    Dependencies:
+        app_settings: Supplies the shared `Settings` object returned by the dependency override.
+
+    Teardown:
+        None.
+
+    Note:
+        This fixture mutates global application state once at session start because `get_settings` is not injectable per request in the current test setup.
+    """
     app.dependency_overrides[get_settings] = lambda: app_settings
 
 
@@ -140,7 +248,23 @@ def _setup_session_overrides(app_settings: Settings) -> None:
 def db_conn(
     migrated_db_pool: ConnectionPool,
 ) -> typing.Generator[Connection, None, None]:
-    """Per-test connection with automatic rollback — prevents data leakage."""
+    """
+    Provides a database connection wrapped in an automatic rollback transaction.
+
+    Scope: function — each test needs isolated writes that are rolled back after execution.
+
+    Provides:
+        An open `Connection` with `force_rollback=True` active for the duration of the test.
+
+    Dependencies:
+        migrated_db_pool: Supplies the shared connection pool used to borrow the test connection.
+
+    Teardown:
+        The transaction rolls back and the connection returns to the pool after the fixture yields.
+
+    Note:
+        Tests should create cursors from this connection rather than opening new pooled connections directly.
+    """
     with migrated_db_pool.connection() as conn:
         with conn.transaction(force_rollback=True):
             yield conn
@@ -154,7 +278,22 @@ _test_router = _APIRouter(prefix="/tests")
 
 
 @_test_router.get("/protected-test")
-def _protected_test(vendor_id: CurrentVendorId, cursor: RLSCursorDep) -> dict:
+def protected_test(vendor_id: CurrentVendorId, cursor: RLSCursorDep) -> dict:
+    """
+    Returns the authenticated vendor id and the database RLS context for protected-route assertions.
+
+    Used by:
+        test_missing_token_returns_401 - exercises the authentication boundary for a protected endpoint.
+        test_expired_token_returns_401 - verifies expired access tokens are rejected before reaching protected logic.
+        test_valid_token_returns_vendor_id - proves the API and database see the same vendor context after authentication.
+
+    Args:
+        vendor_id: `str` vendor identifier resolved from the access token dependency.
+        cursor: `Cursor` opened through the RLS dependency with tenant context already applied.
+
+    Returns:
+        dict: A payload containing the dependency-resolved `vendor_id` and the value stored in `current_setting('app.vendor_id', true)`.
+    """
     cursor.execute("SELECT current_setting('app.vendor_id', true)")
     row = cursor.fetchone()
     db_vendor_id = row[0] if row else None
@@ -171,24 +310,64 @@ app.include_router(_test_router)
 
 
 @pytest.fixture(autouse=True)
-def _override_function_dependencies(
+def override_function_dependencies(
     db_conn: Connection,
 ) -> typing.Generator[None, None, None]:
-    """Automatically applies transactional database overrides to the global `app`."""
+    """
+    Applies per-test database dependency overrides that bind FastAPI dependencies to the transactional test connection.
 
-    def _get_db() -> typing.Generator[Cursor, None, None]:
+    Scope: function — the overrides capture a function-scoped transaction and must be reset after every test.
+
+    Provides:
+        `None`; it temporarily installs `get_db` and `get_rls_cursor` overrides onto the global `app`.
+
+    Dependencies:
+        db_conn: Supplies the transactional database connection whose cursors back the overrides.
+
+    Teardown:
+        Removes the temporary overrides for `get_db` and `get_rls_cursor` after the test finishes.
+
+    Note:
+        This fixture mutates global dependency state because the application dependencies are not injectable without touching `app.dependency_overrides`.
+    """
+
+    def get_db_override() -> typing.Generator[Cursor, None, None]:
+        """
+        Yields a cursor backed by the current test transaction.
+
+        Used by:
+            override_function_dependencies - binds FastAPI's `get_db` dependency to the per-test connection.
+
+        Args:
+            None.
+
+        Returns:
+            typing.Generator[Cursor, None, None]: A cursor created from `db_conn` for one dependency resolution.
+        """
         with db_conn.cursor() as cur:
             yield cur
 
-    def _get_rls_cursor(
+    def get_rls_cursor_override(
         vendor_id: CurrentVendorId,
     ) -> typing.Generator[Cursor, None, None]:
+        """
+        Yields a cursor after applying the authenticated vendor context to the current transaction.
+
+        Used by:
+            override_function_dependencies - binds FastAPI's `get_rls_cursor` dependency to the per-test connection.
+
+        Args:
+            vendor_id: `str` vendor identifier to install through `app.set_app_context`.
+
+        Returns:
+            typing.Generator[Cursor, None, None]: A cursor with the RLS app context already set for the authenticated vendor.
+        """
         with db_conn.cursor() as cur:
             cur.execute("SELECT app.set_app_context(%s)", (vendor_id,))
             yield cur
 
-    app.dependency_overrides[get_db] = _get_db
-    app.dependency_overrides[get_rls_cursor] = _get_rls_cursor
+    app.dependency_overrides[get_db] = get_db_override
+    app.dependency_overrides[get_rls_cursor] = get_rls_cursor_override
 
     try:
         yield

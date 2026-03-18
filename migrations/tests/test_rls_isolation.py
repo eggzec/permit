@@ -55,7 +55,7 @@ def test_vendor_isolation_insert(superconn):
 
         superconn.execute(
             'INSERT INTO app."v_license_node_locked" '
-            '("vendor_id","license_status_code","max_grace_secs","license_key") '
+            '("vendor_id","license_status_code","max_grace_secs","activation_code") '
             "VALUES (%s,%s,%s,%s)",
             (vendor_a_id, "ACTIVE", 60, "key_insert_77_a"),
         )
@@ -63,7 +63,7 @@ def test_vendor_isolation_insert(superconn):
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             superconn.execute(
                 'INSERT INTO app."v_license_node_locked" '
-                '("vendor_id","license_status_code","max_grace_secs","license_key") '
+                '("vendor_id","license_status_code","max_grace_secs","activation_code") '
                 "VALUES (%s,%s,%s,%s)",
                 (vendor_b_id, "ACTIVE", 60, "key_insert_77_b"),
             )
