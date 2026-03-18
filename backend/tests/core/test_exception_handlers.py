@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from app.core.exception_handlers import (
+    _build_error_details,
     api_exception_handler,
     general_exception_handler,
     validation_exception_handler,
@@ -34,12 +35,54 @@ from app.core.exceptions import (
     ServiceUnavailableException,
     ValidationException,
 )
+from app.schemas.response import ErrorDetail
 
 
 # Pre-compiled UUID v4 pattern reused across request-id assertions
 _UUID_V4_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
+
+
+@pytest.mark.unit
+def test_build_error_details_none_returns_empty_list():
+    details = _build_error_details(None)
+    assert details == [], "Expected no details when input is None"
+
+
+@pytest.mark.unit
+def test_build_error_details_accepts_error_detail_instance():
+    item = ErrorDetail(field="email", message="Invalid email")
+
+    details = _build_error_details(item)
+    assert len(details) == 1, "Expected exactly one normalized detail entry"
+    assert details[0] is item, (
+        "Expected ErrorDetail instance input to be preserved without copying"
+    )
+
+
+@pytest.mark.unit
+def test_build_error_details_dict_uses_fallback_message_when_missing():
+    details = _build_error_details({"field": "password"})
+    assert len(details) == 1, "Expected exactly one normalized detail entry"
+    assert details[0].field == "password", (
+        "Expected dict field to be mapped to ErrorDetail.field"
+    )
+    assert details[0].message == "Unknown error", (
+        "Expected missing/empty dict message to use 'Unknown error' fallback"
+    )
+
+
+@pytest.mark.unit
+def test_build_error_details_non_dict_item_is_stringified():
+    details = _build_error_details(RuntimeError("boom"))
+    assert len(details) == 1, "Expected exactly one normalized detail entry"
+    assert details[0].field is None, (
+        "Expected non-dict inputs to map to ErrorDetail with field=None"
+    )
+    assert details[0].message == "boom", (
+        "Expected non-dict inputs to be stringified into detail message"
+    )
 
 
 @pytest.fixture(scope="module")

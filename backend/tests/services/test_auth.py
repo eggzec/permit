@@ -285,18 +285,45 @@ def test_refresh_deleted_vendor_raises(
 
 
 @pytest.mark.integration
-def test_signup_concurrent_insert_conflict(
-    db_conn: Connection, app_settings: Settings
-):
-    """Signup with same email raises ConflictException."""
-    with db_conn.cursor() as db_cursor:
-        email = fake.email()
-        password = fake.password()
-        client_id = str(uuid7())
-        signup(db_cursor, email, password, client_id, app_settings)
+def test_signup_concurrent_insert_conflict_branch(app_settings: Settings):
+    """signup() must raise ConflictException when create_vendor returns None."""
+    cursor = MagicMock()
+    email = fake.email()
+    password = fake.password()
+    client_id = str(uuid7())
 
-        with pytest.raises(ConflictException):
-            signup(db_cursor, email, password, client_id, app_settings)
+    get_by_email_mock = MagicMock(return_value=None)
+    hash_mock = MagicMock(return_value="hashed-password")
+    create_vendor_mock = MagicMock(return_value=None)
+
+    with pytest.MonkeyPatch().context() as mp:
+        mp.setattr("app.services.auth.get_vendor_by_email", get_by_email_mock)
+        mp.setattr("app.services.auth.get_password_hash", hash_mock)
+        mp.setattr("app.services.auth.create_vendor", create_vendor_mock)
+
+        with pytest.raises(ConflictException, match="already exists"):
+            signup(cursor, email, password, client_id, app_settings)
+
+    assert get_by_email_mock.call_count == 1, (
+        "signup must check for an existing vendor before insert"
+    )
+    assert get_by_email_mock.call_args.args == (cursor, email), (
+        "signup must query existing vendor using the signup email"
+    )
+    assert hash_mock.call_count == 1, (
+        "signup must hash the provided password before insert attempt"
+    )
+    assert hash_mock.call_args.args == (password,), (
+        "signup must pass the original password to get_password_hash"
+    )
+    assert create_vendor_mock.call_count == 1, (
+        "signup must attempt create_vendor once after hashing"
+    )
+    assert create_vendor_mock.call_args.args == (
+        cursor,
+        email,
+        "hashed-password",
+    ), "signup must call create_vendor with cursor, email, and hashed password"
 
 
 @pytest.mark.unit
@@ -350,7 +377,14 @@ def test_login_persists_upgraded_hash(app_settings):
         )
 
     # Verify UPDATE was called
-    assert cursor.execute.called
+    assert cursor.execute.called, (
+        "login must persist upgraded password hashes when verify_password "
+        "returns an updated hash"
+    )
     args, _ = cursor.execute.call_args
-    assert 'UPDATE app."vendors"' in args[0]
-    assert "new-hash" in args[1]
+    assert 'UPDATE app."vendors"' in args[0], (
+        "login must execute an UPDATE statement on app.vendors"
+    )
+    assert "new-hash" in args[1], (
+        "login must write the upgraded hash returned by verify_password"
+    )
