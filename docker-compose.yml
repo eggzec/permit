@@ -16,7 +16,7 @@ services:
       - permit_net
 
   db:
-    image: postgres:18.3-alpine3.23
+    image: postgres:18.6-alpine3.23
     restart: unless-stopped
     env_file: .env
     volumes:
