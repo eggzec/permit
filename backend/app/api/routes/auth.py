@@ -17,11 +17,7 @@ from app.services import auth as auth_service
 router = APIRouter()
 
 
-@router.post(
-    "/signup",
-    status_code=status.HTTP_201_CREATED,
-    response_model=SuccessResponse[SignupResponse],
-)
+@router.post("/signup", status_code=status.HTTP_201_CREATED)
 def signup(
     body: SignupRequest, cursor: CursorDep, settings: SettingsDep
 ) -> SuccessResponse[SignupResponse]:
@@ -40,7 +36,7 @@ def signup(
     return SuccessResponse(data=result)
 
 
-@router.post("/login", response_model=SuccessResponse[TokenPair])
+@router.post("/login")
 def login(
     body: LoginRequest, cursor: CursorDep, settings: SettingsDep
 ) -> SuccessResponse[TokenPair]:
@@ -59,7 +55,7 @@ def login(
     return SuccessResponse(data=result)
 
 
-@router.post("/refresh", response_model=SuccessResponse[TokenPair])
+@router.post("/refresh")
 def refresh(
     body: RefreshRequest, cursor: CursorDep, settings: SettingsDep
 ) -> SuccessResponse[TokenPair]:

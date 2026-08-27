@@ -55,7 +55,7 @@
 --   Previous values only — not before/after pairs.
 --   The current value is always queryable from the live table.
 --   Sensitive values (password_hash, session_token_hash,
---   license_key value) are never recorded. Presence of the
+--   activation_code value) are never recorded. Presence of the
 --   action code is sufficient to know the change occurred.
 --
 -- VENDOR ACTOR RESOLUTION
@@ -257,11 +257,11 @@ BEGIN
         -- on the base table fires automatically when not supplied.
         INSERT INTO app."node_locked_license_data" (
             "license_id",
-            "license_key",
+            "activation_code",
             "device_fingerprint_hash"
         ) VALUES (
             v_license_id,
-            NEW."license_key",
+            NEW."activation_code",
             NEW."device_fingerprint_hash"
         );
 
@@ -293,7 +293,7 @@ BEGIN
         WHERE "id" = v_license_id;
 
         UPDATE app."node_locked_license_data" SET
-            "license_key"             = NEW."license_key",
+            "activation_code"         = NEW."activation_code",
             "device_fingerprint_hash" = NEW."device_fingerprint_hash",
             "max_sessions"            = NEW."max_sessions"
         WHERE "license_id" = v_license_id;
@@ -357,10 +357,10 @@ BEGIN
                 jsonb_build_object('device_fingerprint_hash', OLD."device_fingerprint_hash");
         END IF;
 
-        IF OLD."license_key" IS DISTINCT FROM NEW."license_key" THEN
+        IF OLD."activation_code" IS DISTINCT FROM NEW."activation_code" THEN
             -- Key value is never recorded — fact of rotation is sufficient.
             v_modified_diff := v_modified_diff ||
-                jsonb_build_object('license_key', 'rotated');
+                jsonb_build_object('activation_code', 'rotated');
         END IF;
 
         IF v_modified_diff != '{}'::JSONB THEN

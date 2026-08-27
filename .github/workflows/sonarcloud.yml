@@ -4,23 +4,25 @@ permissions:
   contents: read
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   sonarqube:
     name: SonarQube
     runs-on: ubuntu-latest
+    env:
+      UV_NO_DEV: true
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+          fetch-depth: 0 # Shallow clones should be disabled for a better relevancy of analysis
 
       - uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --group test
 
       - name: Run tests and generate coverage
         working-directory: backend

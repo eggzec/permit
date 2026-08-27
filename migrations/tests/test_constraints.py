@@ -117,7 +117,7 @@ def test_license_key_unique_enforced(superconn):
 
 
 @pytest.mark.parametrize(
-    "table_name,expected_cols",
+    ("table_name", "expected_cols"),
     [
         pytest.param(
             "audit_log_vendor_actors",

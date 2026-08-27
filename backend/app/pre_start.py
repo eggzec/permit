@@ -6,6 +6,7 @@ from tenacity import (
     before_log,
     retry,
     retry_if_exception_type,
+    retry_if_not_exception_type,
     stop_after_attempt,
     wait_fixed,
 )
@@ -25,8 +26,7 @@ wait_seconds = 1
     before=before_log(logger, logging.INFO),
     after=after_log(logger, logging.WARNING),
     retry=retry_if_exception_type(Exception)
-    & ~retry_if_exception_type(NotImplementedError)
-    & ~retry_if_exception_type(RuntimeError),
+    & retry_if_not_exception_type((NotImplementedError, RuntimeError)),
 )
 def init() -> None:
     """code to do the pre-start service"""

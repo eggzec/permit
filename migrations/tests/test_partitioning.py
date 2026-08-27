@@ -11,7 +11,7 @@ pytestmark = [pytest.mark.partitioning, pytest.mark.app]
 
 
 @pytest.mark.parametrize(
-    "email,heartbeat_at,partition",
+    ("email", "heartbeat_at", "partition"),
     [
         pytest.param(
             "part-q1@example.com",

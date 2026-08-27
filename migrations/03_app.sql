@@ -203,7 +203,7 @@ DO $$ BEGIN
         "license_id"              UUID    PRIMARY KEY
                                           REFERENCES app."licenses"("id")
                                           ON DELETE RESTRICT,
-        "license_key"             TEXT    NOT NULL UNIQUE,
+        "activation_code"         TEXT    NOT NULL UNIQUE,
         "device_fingerprint_hash" TEXT,
         "max_sessions"            INTEGER NOT NULL DEFAULT 1,
         CONSTRAINT "node_locked_max_sessions_positive"
@@ -215,8 +215,8 @@ END $$;
 
 COMMENT ON TABLE  "app"."node_locked_license_data"                           IS 'Extension table for the node-locked license subtype. Presence of a row indicates the parent license is node-locked. Future subtypes each get their own extension table; no type discriminator is needed on app."licenses". Write through app.v_license_node_locked only. Direct writes bypass audit triggers.';
 COMMENT ON COLUMN "app"."node_locked_license_data"."license_id"              IS 'FK to and PK of the parent license (app."licenses"). Enforces a strict 1:1 relationship. RESTRICT prevents parent deletion while this extension row exists.';
-COMMENT ON COLUMN "app"."node_locked_license_data"."license_key"             IS 'Cryptographically random activation key distributed to the customer. Globally unique across all licenses.';
-COMMENT ON COLUMN "app"."node_locked_license_data"."device_fingerprint_hash" IS 'SHA-256 hash of device identifiers (BIOS UUID + CPU serial + disk serial). Computed server-side. NULL until first activation; locked to the value stored in app."sessions"."device_fingerprint_hash" on the first successful heartbeat for this license.';
+COMMENT ON COLUMN "app"."node_locked_license_data"."activation_code"         IS 'Unique activation code that is provided on the purchase of license. Generated from the license_id on server-side';
+COMMENT ON COLUMN "app"."node_locked_license_data"."device_fingerprint_hash" IS 'SHA-256 hash of device identifiers. Computed server-side. NULL until first activation; locked to the value stored in app."sessions"."device_fingerprint_hash" on the first successful heartbeat for this license.';
 COMMENT ON COLUMN "app"."node_locked_license_data"."max_sessions"            IS 'Maximum number of concurrent ACTIVE sessions permitted on this device. Default 1. Prevents multi-process execution of a single node-locked license.';
 
 -- ============================================================
@@ -471,7 +471,7 @@ DO $$ BEGIN
             app."licenses"."updated_at",
             app."licenses"."deleted_at",
             -- Node-locked extension columns
-            app."node_locked_license_data"."license_key",
+            app."node_locked_license_data"."activation_code",
             app."node_locked_license_data"."device_fingerprint_hash",
             app."node_locked_license_data"."max_sessions"
         FROM "app"."licenses"
