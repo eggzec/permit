@@ -4,7 +4,7 @@ version = "0.1.0"
 description = ""
 requires-python = ">=3.10,<4.0"
 dependencies = [
-    "fastapi[standard]<1.0.0,>=0.114.2",
+    "fastapi[standard]>=0.141.1,<1.0.0",
     "python-multipart<1.0.0,>=0.0.7",
     "tenacity<9.0.0,>=8.2.3",
     "pydantic>2.0",
